@@ -1,8 +1,9 @@
+import { config } from './config.js';
 import { videoCaption, type VideoSource, type VideoMetadata } from './video-utils.js';
 
 export function parseGalleryLink(text: string): VideoSource | undefined {
   const value = text.trim();
-  if (value.length > 512 || /\s/.test(value)) return;
+  if (value.length > config.MEDIA_URL_MAX_LENGTH || /\s/.test(value)) return;
   let url: URL;
   try { url = new URL(value); } catch { return; }
   if (url.protocol !== 'https:' || url.username || url.password || url.port) return;

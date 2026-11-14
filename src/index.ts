@@ -88,7 +88,7 @@ bot.command('summary', async (ctx) => {
     const summary = await summarize(prepared.json);
     const capped = prepared.limited || (selection.kind === 'hours' && rows.length === config.MAX_MESSAGE_COUNT);
     const header = `Саммари по ${prepared.count} сообщениям${capped ? ' (сработал лимит объёма: взяты самые свежие сообщения; длинное сообщение могло быть обрезано)' : ''}:\n\n`;
-    for (const part of splitReply(header + summary)) {
+    for (const part of splitReply(header + summary, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
       await ctx.reply(part, { link_preview_options: { is_disabled: true } });
     }
   } catch {
@@ -141,10 +141,13 @@ process.once('SIGTERM', () => { void shutdown(); });
 try {
   await initializeDatabase();
   await cleanup();
-  cleanupTimer = setInterval(() => { void cleanup().catch(() => console.error('Retention cleanup failed')); }, 3600000);
+  cleanupTimer = setInterval(
+    () => { void cleanup().catch(() => console.error('Retention cleanup failed')); },
+    config.RETENTION_CLEANUP_INTERVAL_MS,
+  );
   cleanupTimer.unref();
   await bot.api.setMyCommands([
-    { command: 'summary', description: 'Саммари: 100, 24h или 7d' },
+    { command: 'summary', description: `Саммари: ${config.DEFAULT_MESSAGE_COUNT}, 24h или 7d` },
     { command: 'help', description: 'Как пользоваться ботом' },
     { command: 'privacy', description: 'Обработка данных' },
     { command: 'chatid', description: 'ID этой группы' },

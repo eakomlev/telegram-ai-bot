@@ -1,8 +1,10 @@
+import { config } from './config.js';
+
 export type VideoSource = { url: string; platform: string };
 
 /** Only standalone links to explicitly supported post types, never arbitrary URLs. */
 export function parseVideoLink(text: string): VideoSource | undefined {
-  if (text.trim().length > 512) return;
+  if (text.trim().length > config.MEDIA_URL_MAX_LENGTH) return;
   let url: URL;
   try { url = new URL(text.trim()); } catch { return; }
   if (url.protocol !== 'https:' || url.username || url.password || url.port) return;
@@ -51,7 +53,7 @@ export function videoCaption(info: VideoMetadata, source: VideoSource): string {
   // Telegram caption limit counts UTF-16 units conservatively; always preserve the source URL.
   const suffix = `\n\nИсточник: ${source.url}`;
   const header = lines.filter(Boolean).join('\n');
-  const available = Math.max(0, 1024 - suffix.length);
+  const available = Math.max(0, config.TELEGRAM_MAX_CAPTION_LENGTH - suffix.length);
   const body = (header + (description ? `\n\n${description}` : '')).slice(0, available);
   return body.replace(/[\uD800-\uDBFF]$/, '') + suffix;
 }

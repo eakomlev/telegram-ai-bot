@@ -4,10 +4,10 @@ import type { ChatMessage, Selection } from './summary.js';
 
 export const pool = new pg.Pool({
   ...(config.DATABASE_URL ? { connectionString: config.DATABASE_URL } : {}),
-  max: 10,
-  connectionTimeoutMillis: 10000,
-  idleTimeoutMillis: 30000,
-  statement_timeout: 15000,
+  max: config.PG_POOL_MAX,
+  connectionTimeoutMillis: config.PG_CONNECTION_TIMEOUT_MS,
+  idleTimeoutMillis: config.PG_IDLE_TIMEOUT_MS,
+  statement_timeout: config.PG_STATEMENT_TIMEOUT_MS,
 });
 pool.on('error', () => console.error('Postgres connection error'));
 
@@ -57,7 +57,10 @@ export async function claimSummary(chatId: number, connection: pg.PoolClient): P
 
 export async function cleanup() {
   await pool.query(`DELETE FROM messages WHERE sent_at < now() - ($1::int * interval '1 day')`, [config.RETENTION_DAYS]);
-  await pool.query(`DELETE FROM summary_requests WHERE requested_at < now() - interval '2 days'`);
+  await pool.query(
+    `DELETE FROM summary_requests WHERE requested_at < now() - ($1::int * interval '1 day')`,
+    [config.SUMMARY_REQUEST_RETENTION_DAYS],
+  );
 }
 
 export async function deleteMessage(chatId: number, messageId: number) {

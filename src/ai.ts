@@ -1,7 +1,12 @@
 import OpenAI from 'openai';
 import { config } from './config.js';
 
-const client = new OpenAI({ apiKey: config.OPENAI_API_KEY, timeout: 90000, maxRetries: 1 });
+const client = new OpenAI({
+  apiKey: config.OPENAI_API_KEY,
+  ...(config.OPENAI_BASE_URL ? { baseURL: config.OPENAI_BASE_URL } : {}),
+  timeout: config.OPENAI_TIMEOUT_MS,
+  maxRetries: config.OPENAI_MAX_RETRIES,
+});
 
 export async function summarize(json: string) {
   const result = await client.chat.completions.create({

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { config } from './config.js';
 
 /** No shell, bounded output, and kill the entire process group (including ffmpeg). */
 export function runProcess(command: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<string> {
@@ -16,7 +17,7 @@ export function runProcess(command: string, args: string[], timeoutMs: number, s
     signal?.addEventListener('abort', stop, { once: true });
     child.stdout.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 4 * 1024 * 1024) stop();
+      if (size > config.PROCESS_MAX_STDOUT_BYTES) stop();
       else chunks.push(chunk);
     });
     // Drain stderr but never log downloader output (may contain signed URLs).

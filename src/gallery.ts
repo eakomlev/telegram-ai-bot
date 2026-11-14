@@ -31,12 +31,14 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
         for (const file of await readdir(root)) total += (await stat(join(root, file)).catch(() => ({ size: 0 }))).size;
         if (total > totalLimit) local.abort();
       })().catch(() => local.abort()).finally(() => { inspecting = false; });
-    }, 500);
+    }, config.GALLERY_DISK_CHECK_INTERVAL_MS);
     await run('gallery-dl', ['--config-ignore', '--no-input', '--no-colors', '--no-mtime',
-      '--cache-file', ':memory:', '--http-timeout', '15', '--retries', '1',
+      '--cache-file', ':memory:',
+      '--http-timeout', String(config.DOWNLOADER_HTTP_TIMEOUT_SECONDS),
+      '--retries', String(config.DOWNLOADER_RETRIES),
       '--directory', root, '--restrict-filenames', 'windows',
       '--range', `1-${config.GALLERY_MAX_IMAGES}`, '--post-range', '1', '--child-range', '1',
-      '--whitelist', 'instagram,twitter,reddit,pixiv,imgur',
+      '--whitelist', config.GALLERY_WHITELIST,
       '--filter', "extension in ('jpg', 'jpeg', 'png', 'webp', 'avif')",
       '--filesize-max', `${config.GALLERY_MAX_IMAGE_MB}M`, '--write-metadata', '--', source.url]);
     clearInterval(monitor);
@@ -54,16 +56,17 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
       if (!size || size > config.GALLERY_MAX_IMAGE_MB * 1024 * 1024 || total > totalLimit) throw new Error('size');
       if (index === 0) {
         const metadataPath = input + '.json';
-        if ((await stat(metadataPath)).size > 4 * 1024 * 1024) throw new Error('metadata size');
+        if ((await stat(metadataPath)).size > config.GALLERY_METADATA_MAX_MB * 1024 * 1024) throw new Error('metadata size');
         const metadata: unknown = JSON.parse(await readFile(metadataPath, 'utf8'));
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('metadata');
         info = metadata as Record<string, unknown>;
       }
       const target = join(root, `telegram-${index}.jpg`);
+      const dim = config.GALLERY_MAX_DIMENSION;
       await run('ffmpeg', ['-nostdin', '-v', 'error', '-i', input, '-frames:v', '1',
-        '-vf', "scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease,pad=w='ceil(max(iw,ih/20)/2)*2':h='ceil(max(ih,iw/20)/2)*2':x='(ow-iw)/2':y='(oh-ih)/2'",
+        '-vf', `scale=w='min(${dim},iw)':h='min(${dim},ih)':force_original_aspect_ratio=decrease,pad=w='ceil(max(iw,ih/20)/2)*2':h='ceil(max(ih,iw/20)/2)*2':x='(ow-iw)/2':y='(oh-ih)/2'`,
         '-threads', '1', '-q:v', '3', '-y', target]);
-      if ((await stat(target)).size > 10 * 1024 * 1024) throw new Error('photo size');
+      if ((await stat(target)).size > config.GALLERY_OUTPUT_MAX_MB * 1024 * 1024) throw new Error('photo size');
       output.push(target);
     }
     const caption = galleryCaption(info, source, inputs.length >= config.GALLERY_MAX_IMAGES);

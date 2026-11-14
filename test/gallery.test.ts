@@ -4,10 +4,7 @@ import { writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Context } from 'grammy';
 import { parseGalleryLink, galleryCaption } from '../src/gallery-utils.js';
-
-process.env.TELEGRAM_BOT_TOKEN ||= 'test';
-process.env.OPENAI_API_KEY ||= 'test';
-const { repostGallery } = await import('../src/gallery.js');
+import { repostGallery } from '../src/gallery.js';
 
 test('accepts individual supported posts, rejects profiles and arbitrary URLs', () => {
   for (const url of ['https://instagram.com/p/abc_123/', 'https://x.com/user/status/123',
