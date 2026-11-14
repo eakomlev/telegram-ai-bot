@@ -13,7 +13,7 @@ export function parseSelection(input: string, defaultCount: number, maxCount: nu
     const hours = Number(period[1]) * (period[2] === 'd' ? 24 : 1);
     if (hours >= 1 && hours <= retentionDays * 24) return { kind: 'hours', hours };
   }
-  throw new Error(`Используйте /summary N (1–${maxCount}) или /summary 24h /summary 7d (до ${retentionDays} дней).`);
+  throw new Error(`Используйте N (1–${maxCount}) или 24h / 7d (до ${retentionDays} дней), например /summary 100 или /verse 24h.`);
 }
 
 // Input rows are chronological. Keep the latest messages within the text budget.

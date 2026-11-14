@@ -41,7 +41,9 @@ for (const count of [1, 3]) {
       return '';
     };
     const ctx = { message: { message_id: 5, message_thread_id: 12 }, chat: { id: -123 },
-      reply: async () => assert.fail('Unexpected error reply'),
+      reply: async () => ({ message_id: 99 }),
+      replyWithChatAction: async () => {},
+      api: { deleteMessage: async () => {}, editMessageText: async () => {} },
       replyWithPhoto: async (...args: unknown[]) => { calls.push(args); },
       replyWithMediaGroup: async (...args: unknown[]) => { calls.push(args); },
     } as unknown as Context;
@@ -61,7 +63,12 @@ test('failed extraction replies without raw errors and removes temporary files',
   let directory = '';
   let response = '';
   const ctx = { message: { message_id: 5 }, chat: { id: -123 },
-    reply: async (value: string) => { response = value; },
+    reply: async () => ({ message_id: 99 }),
+    replyWithChatAction: async () => {},
+    api: {
+      deleteMessage: async () => {},
+      editMessageText: async (_chat: number, _id: number, value: string) => { response = value; },
+    },
   } as unknown as Context;
   await repostGallery(ctx, parseGalleryLink('https://imgur.com/a/abc')!, async (_command, args) => {
     directory = args[args.indexOf('--directory') + 1]!;
@@ -76,7 +83,12 @@ test('photo upload failure also cleans downloaded and converted files', async ()
   let directory = '';
   let replied = false;
   const ctx = { message: { message_id: 5 }, chat: { id: -123 },
-    reply: async () => { replied = true; },
+    reply: async () => ({ message_id: 99 }),
+    replyWithChatAction: async () => {},
+    api: {
+      deleteMessage: async () => {},
+      editMessageText: async () => { replied = true; },
+    },
     replyWithPhoto: async () => { throw new Error('Telegram unavailable'); },
   } as unknown as Context;
   await repostGallery(ctx, parseGalleryLink('https://imgur.com/a/abc')!, async (command, args) => {

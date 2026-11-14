@@ -33,7 +33,11 @@ const clean = (value: unknown, limit: number) => typeof value === 'string'
 
 export function validateVideoMetadata(info: VideoMetadata, maxSeconds: number) {
   if (info._type === 'playlist' || info.is_live || ['is_live', 'is_upcoming'].includes(info.live_status ?? '')) throw new Error('unsupported');
-  if (typeof info.duration !== 'number' || !Number.isFinite(info.duration) || info.duration <= 0 || info.duration > maxSeconds) throw new Error('duration');
+  // Instagram often omits duration until after download; ffprobe enforces the limit later.
+  if (info.duration == null) return;
+  if (typeof info.duration !== 'number' || !Number.isFinite(info.duration) || info.duration <= 0 || info.duration > maxSeconds) {
+    throw new Error('duration');
+  }
 }
 
 export function videoCaption(info: VideoMetadata, source: VideoSource): string {

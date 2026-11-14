@@ -15,7 +15,7 @@ PYEXTRACTORS
 # Synthetic clip exercises the exact Telegram output codec and scaling options.
 ffmpeg -nostdin -v error -f lavfi -i testsrc2=size=1080x1920:rate=10 -f lavfi -i sine=frequency=440 -t 1 -c:v libx264 -threads 2 -pix_fmt yuv420p -c:a aac "$task_tmp/source.mp4"
 ffmpeg -nostdin -v error -i "$task_tmp/source.mp4" -map 0:v:0 -map '0:a:0?' \
-  -vf "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2" \
+  -vf "scale='if(gte(iw\,ih)\,min(720\,iw)\,-2)':'if(lt(iw\,ih)\,min(720\,ih)\,-2)',setsar=1" \
   -c:v libx264 -threads 2 -preset veryfast -crf 26 -pix_fmt yuv420p \
   -c:a aac -b:a 128k -movflags +faststart -fs 47185921 -y "$task_tmp/video.mp4"
 ffprobe -v error -show_entries stream=codec_name,width,height -show_entries format=duration -of json "$task_tmp/video.mp4" > "$task_tmp/probe.json"

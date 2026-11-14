@@ -5,12 +5,16 @@ import { InputFile, type Context } from 'grammy';
 import { config } from './config.js';
 import { enqueueMedia, mediaSignal, mediaClosing } from './media-jobs.js';
 import { runProcess } from './process.js';
+import { resolveChatSettings } from './chat-settings.js';
 import { galleryCaption, parseGalleryLink } from './gallery-utils.js';
+import { startStatus } from './status.js';
 
 type Source = NonNullable<ReturnType<typeof parseGalleryLink>>;
 export async function repostGallery(ctx: Context, source: Source, execute = runProcess) {
   let directory: string | undefined;
   let monitor: NodeJS.Timeout | undefined;
+  let status: Awaited<ReturnType<typeof startStatus>> | undefined;
+  let actionTimer: NodeJS.Timeout | undefined;
   const local = new AbortController();
   const signal = AbortSignal.any([mediaSignal, local.signal, AbortSignal.timeout(config.GALLERY_TIMEOUT_SECONDS * 1000)]);
   const deadline = Date.now() + config.GALLERY_TIMEOUT_SECONDS * 1000;
@@ -18,8 +22,10 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
   const reply = { reply_parameters: { message_id: ctx.message!.message_id, allow_sending_without_reply: true },
     ...(ctx.message?.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}) };
   try {
-    directory = await mkdtemp(join(tmpdir(), 'telegram-gallery-'));
-    const root = directory;
+    status = await startStatus(ctx, '⏳ Загружаю картинки…', reply);
+    actionTimer = setInterval(() => { void ctx.replyWithChatAction('upload_photo').catch(() => {}); }, 4000);
+    actionTimer.unref();
+    directory = await mkdtemp(join(tmpdir(), 'telegram-gallery-'));    const root = directory;
     const totalLimit = config.GALLERY_MAX_TOTAL_MB * 1024 * 1024;
     // Also bounds partial downloads when an upstream server omits Content-Length.
     let inspecting = false;
@@ -78,18 +84,26 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
       await ctx.replyWithMediaGroup(output.map((path, index) => ({ type: 'photo' as const, media: new InputFile(path),
         ...(index === 0 ? { caption } : {}) })), reply, telegramSignal);
     }
+    await status.clear();
   } catch {
     if (!mediaClosing()) {
       console.error('Gallery repost failed', { chatId: ctx.chat?.id, platform: source.platform });
-      await ctx.reply('Не удалось загрузить картинки: пост может требовать входа, не содержать доступных изображений или превышать лимиты.', reply).catch(() => {});
+      const errorText = 'Не удалось загрузить картинки: пост может требовать входа, не содержать доступных изображений или превышать лимиты.';
+      if (status) await status.fail(errorText);
+      else await ctx.reply(errorText, reply).catch(() => {});
     }
   } finally {
+    if (actionTimer) clearInterval(actionTimer);
     if (monitor) clearInterval(monitor);
     if (directory) await rm(directory, { recursive: true, force: true }).catch(() => console.error('Gallery temp cleanup failed'));
   }
 }
 export async function maybeRepostGallery(ctx: Context) {
-  if (config.GALLERY_ENABLED !== 'true' || !ctx.message?.text) return;
+  if (!ctx.message?.text || !ctx.chat) return;
+  const settings = await resolveChatSettings(ctx.chat.id);
+  if (!settings.galleryEnabled) return;
   const source = parseGalleryLink(ctx.message.text);
-  if (source) await enqueueMedia(ctx, () => repostGallery(ctx, source));
+  if (source) {
+    await enqueueMedia(ctx, () => repostGallery(ctx, source), { cooldownSeconds: settings.mediaCooldownSeconds });
+  }
 }

@@ -20,9 +20,10 @@ test('recognizes only standalone short-video links on supported hosts', () => {
   }
 });
 
-test('rejects live, playlists and unknown or excessive duration', () => {
+test('rejects live, playlists and invalid or excessive duration', () => {
   validateVideoMetadata({ duration: 60 }, 180);
-  for (const info of [{ duration: 181 }, {}, { duration: NaN }, { duration: -1 },
+  validateVideoMetadata({}, 180); // platforms like Instagram may omit duration pre-download
+  for (const info of [{ duration: 181 }, { duration: NaN }, { duration: -1 },
     { duration: 60, is_live: true }, { duration: 60, _type: 'playlist' },
     { duration: 60, live_status: 'is_upcoming' }]) {
     assert.throws(() => validateVideoMetadata(info, 180));

@@ -26,7 +26,226 @@ export async function initializeDatabase() {
       chat_id BIGINT PRIMARY KEY,
       requested_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS video_cache (
+      source_url TEXT PRIMARY KEY,
+      file_id TEXT NOT NULL,
+      quality_key TEXT NOT NULL,
+      caption TEXT NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      duration INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS video_cache_last_used ON video_cache (last_used_at ASC);
+    CREATE TABLE IF NOT EXISTS chat_settings (
+      chat_id BIGINT PRIMARY KEY,
+      summary_admin_only BOOLEAN NOT NULL,
+      default_message_count INTEGER NOT NULL,
+      video_enabled BOOLEAN NOT NULL,
+      gallery_enabled BOOLEAN NOT NULL,
+      media_cooldown_seconds INTEGER NOT NULL,
+      sarcasm_level INTEGER NOT NULL DEFAULT 0,
+      mention_enabled BOOLEAN NOT NULL DEFAULT true,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS sarcasm_level INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS mention_enabled BOOLEAN NOT NULL DEFAULT true;
+    CREATE TABLE IF NOT EXISTS openai_usage (
+      id BIGSERIAL PRIMARY KEY,
+      chat_id BIGINT NOT NULL,
+      kind TEXT NOT NULL,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      image_count INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS openai_usage_chat_time ON openai_usage (chat_id, created_at DESC);
   `);
+}
+
+export type OpenAiUsageKind = 'summary' | 'mention';
+
+export type OpenAiUsageRecord = {
+  kind: OpenAiUsageKind;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  imageCount: number;
+  estimatedCostUsd: number;
+};
+
+export type OpenAiUsageTotals = {
+  requests: number;
+  summaryRequests: number;
+  mentionRequests: number;
+  promptTokens: number;
+  completionTokens: number;
+  imageCount: number;
+  estimatedCostUsd: number;
+};
+
+const emptyUsageTotals = (): OpenAiUsageTotals => ({
+  requests: 0,
+  summaryRequests: 0,
+  mentionRequests: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  imageCount: 0,
+  estimatedCostUsd: 0,
+});
+
+export async function recordOpenAiUsage(chatId: number, usage: OpenAiUsageRecord) {
+  await pool.query(
+    `INSERT INTO openai_usage (
+      chat_id, kind, model, prompt_tokens, completion_tokens, image_count, estimated_cost_usd, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
+    [
+      String(chatId),
+      usage.kind,
+      usage.model,
+      usage.promptTokens,
+      usage.completionTokens,
+      usage.imageCount,
+      usage.estimatedCostUsd,
+    ],
+  );
+}
+
+export async function getOpenAiUsageTotals(chatId: number, since?: Date): Promise<OpenAiUsageTotals> {
+  const result = await pool.query<{
+    requests: string;
+    summary_requests: string;
+    mention_requests: string;
+    prompt_tokens: string;
+    completion_tokens: string;
+    image_count: string;
+    estimated_cost_usd: string;
+  }>(
+    `SELECT
+       COUNT(*)::text AS requests,
+       COUNT(*) FILTER (WHERE kind = 'summary')::text AS summary_requests,
+       COUNT(*) FILTER (WHERE kind = 'mention')::text AS mention_requests,
+       COALESCE(SUM(prompt_tokens), 0)::text AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::text AS completion_tokens,
+       COALESCE(SUM(image_count), 0)::text AS image_count,
+       COALESCE(SUM(estimated_cost_usd), 0)::text AS estimated_cost_usd
+     FROM openai_usage
+     WHERE chat_id = $1
+       AND ($2::timestamptz IS NULL OR created_at >= $2)`,
+    [String(chatId), since ?? null],
+  );
+  const row = result.rows[0];
+  if (!row) return emptyUsageTotals();
+  return {
+    requests: Number(row.requests) || 0,
+    summaryRequests: Number(row.summary_requests) || 0,
+    mentionRequests: Number(row.mention_requests) || 0,
+    promptTokens: Number(row.prompt_tokens) || 0,
+    completionTokens: Number(row.completion_tokens) || 0,
+    imageCount: Number(row.image_count) || 0,
+    estimatedCostUsd: Number(row.estimated_cost_usd) || 0,
+  };
+}
+
+export type ChatSettingsRow = {
+  summary_admin_only: boolean;
+  default_message_count: number;
+  video_enabled: boolean;
+  gallery_enabled: boolean;
+  media_cooldown_seconds: number;
+  sarcasm_level: number;
+  mention_enabled: boolean;
+};
+
+export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRow | undefined> {
+  const result = await pool.query<ChatSettingsRow>(
+    `SELECT summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds, sarcasm_level, mention_enabled
+     FROM chat_settings WHERE chat_id = $1`,
+    [String(chatId)],
+  );
+  return result.rows[0];
+}
+
+export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
+  await pool.query(
+    `INSERT INTO chat_settings (
+      chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds, sarcasm_level, mention_enabled, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+    ON CONFLICT (chat_id) DO UPDATE SET
+      summary_admin_only = EXCLUDED.summary_admin_only,
+      default_message_count = EXCLUDED.default_message_count,
+      video_enabled = EXCLUDED.video_enabled,
+      gallery_enabled = EXCLUDED.gallery_enabled,
+      media_cooldown_seconds = EXCLUDED.media_cooldown_seconds,
+      sarcasm_level = EXCLUDED.sarcasm_level,
+      mention_enabled = EXCLUDED.mention_enabled,
+      updated_at = now()`,
+    [
+      String(chatId),
+      row.summary_admin_only,
+      row.default_message_count,
+      row.video_enabled,
+      row.gallery_enabled,
+      row.media_cooldown_seconds,
+      row.sarcasm_level,
+      row.mention_enabled,
+    ],
+  );
+}
+
+export async function deleteChatSettings(chatId: number) {
+  await pool.query('DELETE FROM chat_settings WHERE chat_id = $1', [String(chatId)]);
+}
+
+export type VideoCacheEntry = {
+  file_id: string;
+  caption: string;
+  width: number;
+  height: number;
+  duration: number;
+};
+
+export async function getVideoCache(sourceUrl: string, qualityKey: string): Promise<VideoCacheEntry | undefined> {
+  if (config.VIDEO_CACHE_SIZE <= 0) return;
+  const result = await pool.query<VideoCacheEntry>(`
+    UPDATE video_cache SET last_used_at = now()
+    WHERE source_url = $1 AND quality_key = $2
+    RETURNING file_id, caption, width, height, duration`, [sourceUrl, qualityKey]);
+  return result.rows[0];
+}
+
+export async function saveVideoCache(
+  sourceUrl: string,
+  qualityKey: string,
+  entry: VideoCacheEntry,
+) {
+  if (config.VIDEO_CACHE_SIZE <= 0) return;
+  await pool.query(`
+    INSERT INTO video_cache (source_url, file_id, quality_key, caption, width, height, duration, created_at, last_used_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
+    ON CONFLICT (source_url) DO UPDATE SET
+      file_id = EXCLUDED.file_id,
+      quality_key = EXCLUDED.quality_key,
+      caption = EXCLUDED.caption,
+      width = EXCLUDED.width,
+      height = EXCLUDED.height,
+      duration = EXCLUDED.duration,
+      last_used_at = now()`,
+  [sourceUrl, entry.file_id, qualityKey, entry.caption, entry.width, entry.height, entry.duration]);
+  await pool.query(`
+    WITH ranked AS (
+      SELECT source_url, ROW_NUMBER() OVER (ORDER BY last_used_at DESC) AS rn
+      FROM video_cache
+    )
+    DELETE FROM video_cache
+    WHERE source_url IN (SELECT source_url FROM ranked WHERE rn > $1)`, [config.VIDEO_CACHE_SIZE]);
+}
+
+export async function deleteVideoCache(sourceUrl: string) {
+  await pool.query('DELETE FROM video_cache WHERE source_url = $1', [sourceUrl]);
 }
 
 export async function saveMessage(chatId: number, message: ChatMessage) {
@@ -60,6 +279,10 @@ export async function cleanup() {
   await pool.query(
     `DELETE FROM summary_requests WHERE requested_at < now() - ($1::int * interval '1 day')`,
     [config.SUMMARY_REQUEST_RETENTION_DAYS],
+  );
+  await pool.query(
+    `DELETE FROM openai_usage WHERE created_at < now() - ($1::int * interval '1 day')`,
+    [config.USAGE_RETENTION_DAYS],
   );
 }
 
