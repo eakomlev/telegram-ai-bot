@@ -1,6 +1,11 @@
 import { Bot, type Context } from 'grammy';
 import { config, allowedChatIds, ownerUserId } from './config.js';
-import { parseTelegramProxyUrl, proxyLogLabel, telegramBotOptions } from './telegram-proxy.js';
+import {
+  parseTelegramApiRoot,
+  parseTelegramProxyUrl,
+  proxyLogLabel,
+  telegramBotOptions,
+} from './telegram-proxy.js';
 import { resolveChatSettings } from './chat-settings.js';
 import {
   pool,
@@ -31,7 +36,10 @@ import { maybeRepostVideo } from './video.js';
 import { maybeRepostGallery } from './gallery.js';
 import { stopMediaJobs } from './media-jobs.js';
 
-const bot = new Bot(config.TELEGRAM_BOT_TOKEN, telegramBotOptions(config.TELEGRAM_PROXY_URL));
+const bot = new Bot(
+  config.TELEGRAM_BOT_TOKEN,
+  telegramBotOptions(config.TELEGRAM_PROXY_URL, config.TELEGRAM_API_ROOT),
+);
 let cleanupTimer: NodeJS.Timeout | undefined;
 let stopping = false;
 const help = `Я сохраняю текстовые сообщения и подписи к медиа в этой группе и составляю саммари через OpenAI.
@@ -291,8 +299,16 @@ try {
     void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
   }, config.RETENTION_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
+  const telegramApiRoot = parseTelegramApiRoot(config.TELEGRAM_API_ROOT);
+  if (telegramApiRoot) {
+    const root = new URL(telegramApiRoot);
+    console.log(`Telegram API root enabled (${root.protocol.slice(0, -1)} ${root.host})`);
+  }
   const telegramProxy = parseTelegramProxyUrl(config.TELEGRAM_PROXY_URL);
   if (telegramProxy) console.log(`Telegram proxy enabled (${proxyLogLabel(telegramProxy)})`);
+  if (telegramApiRoot && telegramProxy) {
+    console.warn('Both TELEGRAM_API_ROOT and TELEGRAM_PROXY_URL are set; prefer one or the other');
+  }
   const me = await bot.api.getMe();
   if (!me.username) throw new Error('Bot username is required for @mentions');
   setBotIdentity(me.id, me.username);

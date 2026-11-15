@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
-import { parseTelegramProxyUrl } from './telegram-proxy.js';
+import { parseTelegramApiRoot, parseTelegramProxyUrl } from './telegram-proxy.js';
 
 const integer = (fallback: number, min: number, max: number) =>
   z.coerce.number().int().min(min).max(max).default(fallback);
@@ -18,6 +18,17 @@ const schema = z.object({
       }
     },
     'Expected empty or an http, https, socks5, or socks5h proxy URL with host and port',
+  ),
+  TELEGRAM_API_ROOT: z.string().default('').refine(
+    (value) => {
+      try {
+        parseTelegramApiRoot(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    'Expected empty or an absolute http(s) Telegram API root URL with host (no path, query, hash, or credentials)',
   ),
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default('gpt-4.1-mini'),

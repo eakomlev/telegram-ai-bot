@@ -4,6 +4,8 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 
 const invalidProxyUrlMessage =
   'Expected empty or an http, https, socks5, or socks5h proxy URL with host and port';
+const invalidApiRootMessage =
+  'Expected empty or an absolute http(s) Telegram API root URL with host (no path, query, hash, or credentials)';
 const agentOptions = { keepAlive: true, timeout: 60_000 };
 const agents = new Map<string, HttpsProxyAgent<string> | SocksProxyAgent>();
 
@@ -25,6 +27,31 @@ export function parseTelegramProxyUrl(value: string): URL | undefined {
     throw new Error(invalidProxyUrlMessage);
   }
   return url;
+}
+
+/** Absolute http(s) Bot API root without trailing slash, or undefined if empty. */
+export function parseTelegramApiRoot(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(invalidApiRootMessage);
+  }
+  const pathOk = url.pathname === '' || url.pathname === '/';
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:')
+    || !url.hostname
+    || !pathOk
+    || url.search
+    || url.hash
+    || url.username
+    || url.password
+  ) {
+    throw new Error(invalidApiRootMessage);
+  }
+  return url.origin;
 }
 
 export function proxyLogLabel(url: URL): string {
@@ -50,10 +77,22 @@ function sharedTelegramProxyAgent(proxyUrl: string) {
   return agent;
 }
 
-export function telegramBotOptions(proxyUrl: string) {
+export function telegramBotOptions(proxyUrl: string, apiRoot = '') {
   const agent = sharedTelegramProxyAgent(proxyUrl);
-  if (!agent) return undefined;
-  return { client: { baseFetchConfig: { agent } } };
+  const root = parseTelegramApiRoot(apiRoot);
+  if (!agent && !root) return undefined;
+  return {
+    client: {
+      ...(root ? { apiRoot: root } : {}),
+      ...(agent ? { baseFetchConfig: { agent } } : {}),
+    },
+  };
+}
+
+export function telegramFileUrl(apiRoot: string, token: string, filePath: string) {
+  const root = parseTelegramApiRoot(apiRoot) ?? 'https://api.telegram.org';
+  const path = filePath.replace(/^\/+/, '');
+  return `${root}/file/bot${token}/${path}`;
 }
 
 export async function telegramFileFetch(proxyUrl: string, fileUrl: string) {
