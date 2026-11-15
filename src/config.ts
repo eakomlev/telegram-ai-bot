@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { parseTelegramProxyUrl } from './telegram-proxy.js';
 
 const integer = (fallback: number, min: number, max: number) =>
   z.coerce.number().int().min(min).max(max).default(fallback);
@@ -7,6 +8,17 @@ const bool = z.enum(['true', 'false']);
 
 const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
+  TELEGRAM_PROXY_URL: z.string().default('').refine(
+    (value) => {
+      try {
+        parseTelegramProxyUrl(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    'Expected empty or an http, https, socks5, or socks5h proxy URL with host and port',
+  ),
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default('gpt-4.1-mini'),
   OPENAI_BASE_URL: z.string().default(''),

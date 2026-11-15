@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { recordOpenAiUsage } from './db.js';
 import { splitReply } from './summary.js';
 import { startStatus } from './status.js';
+import { telegramFileFetch } from './telegram-proxy.js';
 
 let botIdentity: { id: number; username: string } | undefined;
 const recentMentions = new Map<number, number>();
@@ -148,7 +149,7 @@ async function downloadTelegramImages(api: Api, fileIds: string[]): Promise<Ment
       if (!file.file_path) continue;
       if (typeof file.file_size === 'number' && file.file_size > maxBytes) continue;
       const url = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
-      const response = await fetch(url);
+      const response = await telegramFileFetch(config.TELEGRAM_PROXY_URL, url);
       if (!response.ok) continue;
       const buffer = Buffer.from(await response.arrayBuffer());
       if (!buffer.length || buffer.length > maxBytes) continue;
