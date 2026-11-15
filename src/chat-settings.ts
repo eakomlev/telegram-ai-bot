@@ -12,7 +12,7 @@ export type ChatSettings = {
 };
 
 const COUNT_STEPS = [50, 100, 200, 500, 1000];
-const COOLDOWN_STEPS = [15, 30, 60, 120, 300];
+const COOLDOWN_STEPS = [10, 15, 30, 60, 120, 300];
 const SARCASM_STEPS = [0, 25, 50, 75, 100];
 
 export function defaultChatSettings(): ChatSettings {

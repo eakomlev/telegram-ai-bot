@@ -1,7 +1,12 @@
+import type { MessageEntity } from 'grammy/types';
 import { config } from './config.js';
+import { parseMarketplaceLink } from './marketplace.js';
 import { videoCaption, type VideoSource, type VideoMetadata } from './video-utils.js';
 
-export function parseGalleryLink(text: string): VideoSource | undefined {
+export function parseGalleryLink(text: string, entities: MessageEntity[] = []): VideoSource | undefined {
+  const marketplace = parseMarketplaceLink(text, entities);
+  if (marketplace) return marketplace;
+
   const value = text.trim();
   if (value.length > config.MEDIA_URL_MAX_LENGTH || /\s/.test(value)) return;
   let url: URL;
@@ -32,13 +37,20 @@ function author(value: unknown): string | undefined {
 }
 export function galleryCaption(info: Record<string, unknown>, source: VideoSource, limited: boolean): string {
   const date = text(info.date) ?? text(info.date_posted);
+  const isProduct = info.extractor === 'marketplace-browser';
   const normalized: VideoMetadata = {
     title: text(info.title),
-    description: text(info.description) ?? text(info.content) ?? text(info.caption) ?? text(info.text),
-    uploader: author(info.user) ?? author(info.author) ?? author(info.uploader),
-    upload_date: date?.slice(0, 10).replace(/-/g, ''),
-    like_count: typeof info.favorite_count === 'number' ? info.favorite_count : typeof info.likes === 'number' ? info.likes : undefined,
+    description: isProduct
+      ? undefined
+      : text(info.description) ?? text(info.content) ?? text(info.caption) ?? text(info.text),
+    uploader: isProduct ? undefined : author(info.user) ?? author(info.author) ?? author(info.uploader),
+    upload_date: isProduct ? undefined : date?.slice(0, 10).replace(/-/g, ''),
+    like_count: isProduct
+      ? undefined
+      : typeof info.favorite_count === 'number' ? info.favorite_count : typeof info.likes === 'number' ? info.likes : undefined,
   };
-  if (limited) normalized.title = `${normalized.title ?? 'Изображения поста'} (показаны первые изображения в пределах лимита)`;
+  if (limited) {
+    normalized.title = `${normalized.title ?? (isProduct ? 'Товар' : 'Изображения поста')} (показаны первые изображения в пределах лимита)`;
+  }
   return videoCaption(normalized, source);
 }

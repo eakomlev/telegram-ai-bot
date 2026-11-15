@@ -9,8 +9,9 @@ test('cycles default message counts within max', () => {
 });
 
 test('cycles media cooldown steps', () => {
+  assert.equal(cycleMediaCooldown(10), 15);
   assert.equal(cycleMediaCooldown(30), 60);
-  assert.equal(cycleMediaCooldown(300), 15);
+  assert.equal(cycleMediaCooldown(300), 10);
 });
 
 test('cycles sarcasm level from 0 to 100', () => {
@@ -30,12 +31,17 @@ test('defaults and format mention admin-only controls', () => {
 
 test('summary prompt stays factual and softens high sarcasm', () => {
   assert.match(buildSummarySystemPrompt(0), /нейтральный/);
+  assert.match(buildSummarySystemPrompt(0), /🔥 Главное/);
+  assert.match(buildSummarySystemPrompt(0), /друг, который прочитал весь чат/);
   assert.match(buildSummarySystemPrompt(100), /не обидно/);
-  assert.match(buildSummarySystemPrompt(100), /Не выдумывай факты/);
+  assert.match(buildSummarySystemPrompt(100), /Не придумывай факты/);
 });
 
-test('verse summary prompt asks for a poem while keeping facts', () => {
+test('verse summary prompt is a separate humorous poem brief', () => {
   const prompt = buildSummarySystemPrompt(0, 'verse');
-  assert.match(prompt, /стихотворения/);
-  assert.match(prompt, /Не выдумывай факты/);
+  assert.match(prompt, /талантливый поэт/);
+  assert.match(prompt, /четверостиший/);
+  assert.match(prompt, /Не придумывай события/);
+  assert.doesNotMatch(prompt, /🔥 Главное/);
+  assert.match(prompt, /нейтральный/);
 });

@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import type { OpenAiUsageTotals } from './db.js';
 
-export type UsageKind = 'summary' | 'mention';
+export type UsageKind = 'summary' | 'mention' | 'gif';
 
 export type AiUsage = {
   model: string;
@@ -53,13 +53,14 @@ function formatTokens(value: number) {
   return String(value);
 }
 
-function formatPeriod(label: string, totals: OpenAiUsageTotals) {
+function formatPeriod(label: string, totals: OpenAiUsageTotals, extraLines: string[] = []) {
   const tokens = totals.promptTokens + totals.completionTokens;
   return [
     `${label}: ${formatUsd(totals.estimatedCostUsd)}`,
-    `  запросов: ${totals.requests} (саммари ${totals.summaryRequests}, @упоминания ${totals.mentionRequests})`,
+    `  запросов: ${totals.requests} (саммари ${totals.summaryRequests}, @упоминания ${totals.mentionRequests}, gif ${totals.gifRequests})`,
     `  токены: ${formatTokens(tokens)} (in ${formatTokens(totals.promptTokens)} / out ${formatTokens(totals.completionTokens)})`,
     `  картинки: ${totals.imageCount}`,
+    ...extraLines.map((line) => `  ${line}`),
   ].join('\n');
 }
 
@@ -74,4 +75,45 @@ export function formatUsageReport(today: OpenAiUsageTotals, total: OpenAiUsageTo
     `Цены: текст in $${config.OPENAI_INPUT_USD_PER_1M_TOKENS}/1M, out $${config.OPENAI_OUTPUT_USD_PER_1M_TOKENS}/1M; картинка $${config.OPENAI_IMAGE_USD}.`,
     'Это не счёт из кабинета OpenAI — ориентир для сравнения чатов.',
   ].join('\n');
+}
+
+export type OwnerUsageChatLine = {
+  chatId: number;
+  label: string;
+  today: OpenAiUsageTotals;
+  total: OpenAiUsageTotals;
+  members?: number;
+};
+
+export function formatOwnerUsageReport(
+  today: OpenAiUsageTotals,
+  total: OpenAiUsageTotals,
+  chats: OwnerUsageChatLine[],
+  groups: { newToday: number; total: number; members?: number },
+) {
+  const totalExtra = [`всего групп: ${groups.total}`];
+  totalExtra.push(
+    groups.members == null ? 'участников: —' : `участников: ${groups.members}`,
+  );
+  const lines = [
+    'Расходы OpenAI по всем группам:',
+    '',
+    formatPeriod('Сегодня (UTC)', today, [`новых групп: ${groups.newToday}`]),
+    '',
+    formatPeriod('За всё время хранения', total, totalExtra),
+  ];
+  if (chats.length) {
+    lines.push('', 'По группам (за срок хранения, дорогие сверху):');
+    for (const chat of chats) {
+      const members = typeof chat.members === 'number' ? `, ${chat.members} уч.` : '';
+      lines.push(
+        `• ${chat.label}: ${formatUsd(chat.total.estimatedCostUsd)}` +
+          ` (сегодня ${formatUsd(chat.today.estimatedCostUsd)},` +
+          ` запросов ${chat.total.requests}${members})`,
+      );
+    }
+  } else {
+    lines.push('', 'Пока нет записанных запросов OpenAI.');
+  }
+  return lines.join('\n');
 }

@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAiUsage, estimateImageCostUsd, estimateTextCostUsd, formatUsd, formatUsageReport } from '../src/usage.js';
+import {
+  buildAiUsage,
+  estimateImageCostUsd,
+  estimateTextCostUsd,
+  formatOwnerUsageReport,
+  formatUsd,
+  formatUsageReport,
+} from '../src/usage.js';
 
 test('estimates text cost from env prices', () => {
   // 1M in + 1M out at defaults 0.4 / 1.6
@@ -31,29 +38,50 @@ test('formatUsd picks precision by magnitude', () => {
   assert.equal(formatUsd(1.2), '$1.20');
 });
 
+const sampleToday = {
+  requests: 2,
+  summaryRequests: 1,
+  mentionRequests: 1,
+  gifRequests: 0,
+  promptTokens: 1500,
+  completionTokens: 400,
+  imageCount: 1,
+  estimatedCostUsd: 0.012,
+};
+const sampleTotal = {
+  requests: 10,
+  summaryRequests: 4,
+  mentionRequests: 6,
+  gifRequests: 0,
+  promptTokens: 20000,
+  completionTokens: 5000,
+  imageCount: 3,
+  estimatedCostUsd: 0.2,
+};
+
 test('formatUsageReport includes today and totals', () => {
-  const text = formatUsageReport(
-    {
-      requests: 2,
-      summaryRequests: 1,
-      mentionRequests: 1,
-      promptTokens: 1500,
-      completionTokens: 400,
-      imageCount: 1,
-      estimatedCostUsd: 0.012,
-    },
-    {
-      requests: 10,
-      summaryRequests: 4,
-      mentionRequests: 6,
-      promptTokens: 20000,
-      completionTokens: 5000,
-      imageCount: 3,
-      estimatedCostUsd: 0.2,
-    },
-  );
+  const text = formatUsageReport(sampleToday, sampleTotal);
   assert.match(text, /Сегодня \(UTC\)/);
   assert.match(text, /\$0\.012/);
   assert.match(text, /саммари 1/);
   assert.match(text, /не счёт/i);
+});
+
+test('formatOwnerUsageReport lists chats across groups', () => {
+  const text = formatOwnerUsageReport(sampleToday, sampleTotal, [{
+    chatId: -1001,
+    label: 'Семья (-1001)',
+    today: sampleToday,
+    total: sampleTotal,
+    members: 42,
+  }], { newToday: 1, total: 4, members: 120 });
+  assert.match(text, /по всем группам/i);
+  assert.match(text, /новых групп: 1/);
+  assert.match(text, /всего групп: 4/);
+  assert.match(text, /участников: 120/);
+  assert.match(text, /Семья \(-1001\)/);
+  assert.match(text, /42 уч\./);
+  assert.match(text, /\$0\.20/);
+  assert.match(text, /сегодня \$0\.012/);
+  assert.doesNotMatch(text, /Цены:/);
 });

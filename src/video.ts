@@ -5,7 +5,7 @@ import { InputFile, type Context } from 'grammy';
 import { config } from './config.js';
 import { deleteVideoCache, getVideoCache, saveVideoCache } from './db.js';
 import { runProcess } from './process.js';
-import { parseVideoLink, validateVideoMetadata, videoCaption, type VideoMetadata } from './video-utils.js';
+import { parseVideoLink, validateVideoMetadata, type VideoMetadata } from './video-utils.js';
 
 import { resolveChatSettings } from './chat-settings.js';
 import { enqueueMedia, mediaSignal, mediaClosing } from './media-jobs.js';
@@ -31,7 +31,6 @@ async function sendCached(
   try {
     await ctx.replyWithVideo(cached.file_id, {
       ...reply,
-      caption: cached.caption,
       supports_streaming: true,
       width: cached.width,
       height: cached.height,
@@ -106,12 +105,10 @@ async function repost(ctx: Context, source: NonNullable<ReturnType<typeof parseV
     const outHeight = Number(outputProbe.streams?.[0]?.height);
     if (!Number.isFinite(outputDuration) || Math.abs(outputDuration - duration) > 1) throw new Error('incomplete video');
     if (!Number.isFinite(outWidth) || !Number.isFinite(outHeight) || outWidth < 2 || outHeight < 2) throw new Error('dimensions');
-    const caption = videoCaption(info, source);
     // grammY declares the legacy node-fetch signal type; native Node signals work at runtime.
     const uploadSignal = AbortSignal.any([mediaSignal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
     const sent = await ctx.replyWithVideo(new InputFile(output), {
       ...reply,
-      caption,
       supports_streaming: true,
       width: outWidth,
       height: outHeight,
@@ -122,7 +119,7 @@ async function repost(ctx: Context, source: NonNullable<ReturnType<typeof parseV
     if (fileId) {
       await saveVideoCache(source.url, videoQualityKey(), {
         file_id: fileId,
-        caption,
+        caption: '',
         width: outWidth,
         height: outHeight,
         duration: Math.round(outputDuration),

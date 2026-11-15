@@ -21,14 +21,25 @@ const schema = z.object({
     (value) => !value.trim() || value.split(',').every((id) => /^-\d+$/.test(id.trim())),
     'Expected comma-separated negative Telegram group IDs',
   ),
+  /** Telegram user id of the bot owner; private /stats works only for this account. */
+  OWNER_USER_ID: z.string().default('').refine(
+    (value) => !value.trim() || /^\d+$/.test(value.trim()),
+    'Expected numeric Telegram user id',
+  ),
   SUMMARY_ADMIN_ONLY: bool.default('true'),
   DEFAULT_MESSAGE_COUNT: integer(100, 1, 10000),
   MAX_MESSAGE_COUNT: integer(1000, 1, 10000),
   MAX_INPUT_CHARS: integer(60000, 1000, 500000),
   MAX_OUTPUT_TOKENS: integer(1500, 256, 10000),
-  SUMMARY_COOLDOWN_SECONDS: integer(60, 1, 86400),
+  SUMMARY_COOLDOWN_SECONDS: integer(10, 1, 86400),
   SUMMARY_REQUEST_RETENTION_DAYS: integer(2, 1, 365),
   SUMMARY_SARCASM_PERCENT: integer(0, 0, 100),
+  GIF_ENABLED: bool.default('true'),
+  GIPHY_API_KEY: z.string().default(''),
+  GIF_DEFAULT_MESSAGE_COUNT: integer(40, 1, 10000),
+  GIF_MAX_MESSAGE_COUNT: integer(80, 1, 10000),
+  GIF_MAX_INPUT_CHARS: integer(12000, 1000, 100000),
+  GIF_COOLDOWN_SECONDS: integer(10, 1, 3600),
   TELEGRAM_MAX_MESSAGE_LENGTH: integer(4000, 1000, 4096),
   TELEGRAM_MAX_CAPTION_LENGTH: integer(1024, 100, 1024),
   MEDIA_URL_MAX_LENGTH: integer(512, 64, 2048),
@@ -45,13 +56,20 @@ const schema = z.object({
   GALLERY_OUTPUT_MAX_MB: integer(10, 1, 20),
   GALLERY_METADATA_MAX_MB: integer(4, 1, 32),
   GALLERY_WHITELIST: z.string().min(1).default('instagram,twitter,reddit,pixiv,imgur'),
+  INSTAGRAM_BROWSER_ENABLED: bool.default('true'),
+  /** Hard cap for the whole Instagram fetch (gallery-dl + Playwright). */
+  INSTAGRAM_DOWNLOAD_TIMEOUT_MS: integer(120000, 10000, 300000),
+  /** Per page.goto / navigation timeout inside the Instagram browser fallback. */
+  INSTAGRAM_BROWSER_TIMEOUT_MS: integer(40000, 5000, 120000),
+  MARKETPLACE_ENABLED: bool.default('true'),
+  MARKETPLACE_MAX_IMAGES: integer(5, 1, 10),
   MEDIA_MAX_CONCURRENT: z.coerce.number().int().min(1).max(3).optional(),
   MEDIA_COOLDOWN_SECONDS: z.coerce.number().int().min(1).max(3600).optional(),
   VIDEO_ENABLED: bool.default('true'),
   VIDEO_MAX_SIZE_MB: integer(45, 1, 45),
   VIDEO_MAX_DURATION_SECONDS: integer(180, 1, 600),
   VIDEO_TIMEOUT_SECONDS: integer(180, 10, 600),
-  VIDEO_COOLDOWN_SECONDS: integer(30, 1, 3600),
+  VIDEO_COOLDOWN_SECONDS: integer(10, 1, 3600),
   VIDEO_MAX_CONCURRENT: integer(1, 1, 3),
   VIDEO_MAX_HEIGHT: integer(1080, 240, 2160),
   VIDEO_FFMPEG_THREADS: integer(2, 1, 16),
@@ -63,7 +81,7 @@ const schema = z.object({
   MENTION_ENABLED: bool.default('true'),
   MENTION_MAX_INPUT_CHARS: integer(1500, 100, 8000),
   MENTION_MAX_OUTPUT_TOKENS: integer(600, 64, 4000),
-  MENTION_COOLDOWN_SECONDS: integer(15, 1, 3600),
+  MENTION_COOLDOWN_SECONDS: integer(10, 1, 3600),
   MENTION_IMAGES_ENABLED: bool.default('true'),
   MENTION_MAX_IMAGES: integer(2, 0, 4),
   MENTION_VISION_ENABLED: bool.default('true'),
@@ -82,6 +100,12 @@ export const config = schema.parse(process.env);
 if (config.DEFAULT_MESSAGE_COUNT > config.MAX_MESSAGE_COUNT) {
   throw new Error('DEFAULT_MESSAGE_COUNT must not exceed MAX_MESSAGE_COUNT');
 }
+if (config.GIF_DEFAULT_MESSAGE_COUNT > config.GIF_MAX_MESSAGE_COUNT) {
+  throw new Error('GIF_DEFAULT_MESSAGE_COUNT must not exceed GIF_MAX_MESSAGE_COUNT');
+}
 export const allowedChatIds = new Set(
   config.ALLOWED_CHAT_IDS.split(',').map((id) => id.trim()).filter(Boolean),
 );
+export const ownerUserId = config.OWNER_USER_ID.trim()
+  ? Number(config.OWNER_USER_ID.trim())
+  : undefined;

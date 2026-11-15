@@ -1,7 +1,13 @@
 export type Selection = { kind: 'count'; count: number } | { kind: 'hours'; hours: number };
 export type ChatMessage = { message_id: number; author: string; text: string; sent_at: Date };
 
-export function parseSelection(input: string, defaultCount: number, maxCount: number, retentionDays: number): Selection {
+export function parseSelection(
+  input: string,
+  defaultCount: number,
+  maxCount: number,
+  retentionDays: number,
+  exampleCommand = '/summary',
+): Selection {
   const value = input.trim().toLowerCase();
   if (!value) return { kind: 'count', count: defaultCount };
   if (/^\d+$/.test(value)) {
@@ -13,7 +19,9 @@ export function parseSelection(input: string, defaultCount: number, maxCount: nu
     const hours = Number(period[1]) * (period[2] === 'd' ? 24 : 1);
     if (hours >= 1 && hours <= retentionDays * 24) return { kind: 'hours', hours };
   }
-  throw new Error(`Используйте N (1–${maxCount}) или 24h / 7d (до ${retentionDays} дней), например /summary 100 или /verse 24h.`);
+  throw new Error(
+    `Используйте N (1–${maxCount}) или 24h / 7d (до ${retentionDays} дней), например ${exampleCommand} 40.`,
+  );
 }
 
 // Input rows are chronological. Keep the latest messages within the text budget.

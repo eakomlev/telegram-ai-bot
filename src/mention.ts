@@ -80,6 +80,23 @@ export function quotedContext(message: Message | undefined): { author: string; t
   return { author: authorOf(message), text: text || '(изображение без подписи)' };
 }
 
+/** Detect meme intent by keywords in the user request (not the quote body alone). */
+export function isMemeRequest(text: string): boolean {
+  const value = text.trim().toLowerCase();
+  if (!value) return false;
+  if (/(?:^|[^\p{L}\p{N}])мем(?:ы|а|у|ом|е|ов|ами|ах)?(?=[^\p{L}\p{N}]|$)/u.test(value)) return true;
+  if (/\bmemes?\b/.test(value)) return true;
+  if (/демотиватор/.test(value)) return true;
+  if (/\bdrake\b/.test(value)) return true;
+  if (/\bwojak\b|войак/.test(value)) return true;
+  if (/\bpepe\b|пепе/.test(value)) return true;
+  if (/две\s+кнопк/.test(value)) return true;
+  if (/two\s+buttons/.test(value)) return true;
+  if (/expanding\s+brain/.test(value)) return true;
+  if (/distracted\s+boyfriend/.test(value)) return true;
+  return false;
+}
+
 /** Prefer keeping the user request; trim the quote first if over budget. */
 export function buildMentionPrompt(
   userText: string,
@@ -183,7 +200,8 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
     ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
   };
-  const status = await startStatus(ctx, '⏳ Думаю…', reply);
+  const memeMode = isMemeRequest(userText);
+  const status = await startStatus(ctx, memeMode ? '⏳ Делаю мем…' : '⏳ Думаю…', reply);
   try {
     const inputImages = await downloadTelegramImages(ctx.api, fileIds);
     const result = await replyToMention(prompt || 'Опиши и прокомментируй изображение(я).', {
@@ -192,6 +210,7 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
       maxImages: config.MENTION_MAX_IMAGES,
       maxOutputTokens: config.MENTION_MAX_OUTPUT_TOKENS,
       inputImages,
+      memeMode,
     });
     const chatId = ctx.chat.id;
     await recordOpenAiUsage(chatId, {

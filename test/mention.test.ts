@@ -3,11 +3,13 @@ import test from 'node:test';
 import {
   buildMentionPrompt,
   collectMessageImageFileIds,
+  isMemeRequest,
   messageMentionsBot,
   quotedContext,
   setBotIdentity,
   stripBotMention,
 } from '../src/mention.js';
+import { buildMentionSystemPrompt } from '../src/ai.js';
 import type { Message } from 'grammy/types';
 
 setBotIdentity(42, 'SummaryBot');
@@ -96,4 +98,22 @@ test('collectMessageImageFileIds prefers the largest photo and image documents',
 
 test('image-only context gets a default request', () => {
   assert.match(buildMentionPrompt('', undefined, 1500, true), /изображен/);
+});
+
+test('detects meme keywords and ignores plain image requests', () => {
+  assert.equal(isMemeRequest('сделай мем про опоздание'), true);
+  assert.equal(isMemeRequest('Демотиватор: понедельник'), true);
+  assert.equal(isMemeRequest('drake meme about coffee'), true);
+  assert.equal(isMemeRequest('две кнопки: спать или ещё серию'), true);
+  assert.equal(isMemeRequest('нарисуй кота в космосе'), false);
+  assert.equal(isMemeRequest('что такое мемплекс'), false);
+});
+
+test('meme system prompt forces friendly meme image instructions', () => {
+  const meme = buildMentionSystemPrompt(0, true, 2, false, true);
+  assert.match(meme, /мем/i);
+  assert.match(meme, /attach_image/);
+  assert.match(meme, /доброжелательно/);
+  const plain = buildMentionSystemPrompt(0, true, 2, false, false);
+  assert.doesNotMatch(plain, /Пользователь просит мем/);
 });

@@ -7,6 +7,8 @@ import { enqueueMedia, mediaSignal, mediaClosing } from './media-jobs.js';
 import { runProcess } from './process.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { galleryCaption, parseGalleryLink } from './gallery-utils.js';
+import { downloadInstagramWithBrowser } from './instagram-browser.js';
+import { downloadMarketplaceProduct, isMarketplacePlatform } from './marketplace.js';
 import { startStatus } from './status.js';
 
 type Source = NonNullable<ReturnType<typeof parseGalleryLink>>;
@@ -25,7 +27,8 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
     status = await startStatus(ctx, '⏳ Загружаю картинки…', reply);
     actionTimer = setInterval(() => { void ctx.replyWithChatAction('upload_photo').catch(() => {}); }, 4000);
     actionTimer.unref();
-    directory = await mkdtemp(join(tmpdir(), 'telegram-gallery-'));    const root = directory;
+    directory = await mkdtemp(join(tmpdir(), 'telegram-gallery-'));
+    const root = directory;
     const totalLimit = config.GALLERY_MAX_TOTAL_MB * 1024 * 1024;
     // Also bounds partial downloads when an upstream server omits Content-Length.
     let inspecting = false;
@@ -38,29 +41,76 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
         if (total > totalLimit) local.abort();
       })().catch(() => local.abort()).finally(() => { inspecting = false; });
     }, config.GALLERY_DISK_CHECK_INTERVAL_MS);
-    await run('gallery-dl', ['--config-ignore', '--no-input', '--no-colors', '--no-mtime',
-      '--cache-file', ':memory:',
-      '--http-timeout', String(config.DOWNLOADER_HTTP_TIMEOUT_SECONDS),
-      '--retries', String(config.DOWNLOADER_RETRIES),
-      '--directory', root, '--restrict-filenames', 'windows',
-      '--range', `1-${config.GALLERY_MAX_IMAGES}`, '--post-range', '1', '--child-range', '1',
-      '--whitelist', config.GALLERY_WHITELIST,
-      '--filter', "extension in ('jpg', 'jpeg', 'png', 'webp', 'avif')",
-      '--filesize-max', `${config.GALLERY_MAX_IMAGE_MB}M`, '--write-metadata', '--', source.url]);
+    let entries: string[] = [];
+    let inputs: string[] = [];
+    let info: Record<string, unknown> = {};
+    const isInstagram = source.platform === 'Instagram';
+    const fetchSignal = isInstagram
+      ? AbortSignal.any([signal, AbortSignal.timeout(config.INSTAGRAM_DOWNLOAD_TIMEOUT_MS)])
+      : signal;
+    const fetchDeadline = isInstagram
+      ? Math.min(deadline, Date.now() + config.INSTAGRAM_DOWNLOAD_TIMEOUT_MS)
+      : deadline;
+
+    if (isMarketplacePlatform(source.platform)) {
+      if (config.MARKETPLACE_ENABLED !== 'true') throw new Error('marketplace disabled');
+      const product = await downloadMarketplaceProduct(source, root, {
+        maxImages: Math.min(config.MARKETPLACE_MAX_IMAGES, config.GALLERY_MAX_IMAGES),
+        maxBytesPerImage: config.GALLERY_MAX_IMAGE_MB * 1024 * 1024,
+        signal,
+      });
+      info = product.info;
+      entries = await readdir(root);
+      inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+    } else {
+      // Instagram gallery-dl often hangs; keep a short budget so Playwright can still run.
+      const galleryDlBudgetMs = isInstagram
+        ? Math.min(40_000, Math.max(1, fetchDeadline - Date.now()))
+        : Math.max(1, fetchDeadline - Date.now());
+      try {
+        await execute('gallery-dl', ['--config-ignore', '--no-input', '--no-colors', '--no-mtime',
+          '--cache-file', ':memory:',
+          '--http-timeout', String(config.DOWNLOADER_HTTP_TIMEOUT_SECONDS),
+          '--retries', String(config.DOWNLOADER_RETRIES),
+          '--directory', root, '--restrict-filenames', 'windows',
+          '--range', `1-${config.GALLERY_MAX_IMAGES}`, '--post-range', '1', '--child-range', '1',
+          '--whitelist', config.GALLERY_WHITELIST,
+          '--filter', "extension in ('jpg', 'jpeg', 'png', 'webp', 'avif')",
+          '--filesize-max', `${config.GALLERY_MAX_IMAGE_MB}M`, '--write-metadata', '--', source.url],
+        galleryDlBudgetMs, fetchSignal);
+      } catch (error) {
+        if (!isInstagram || config.INSTAGRAM_BROWSER_ENABLED !== 'true') throw error;
+        console.error('gallery-dl failed for Instagram, trying Playwright');
+      }
+      entries = await readdir(root);
+      inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      if (
+        !inputs.length
+        && isInstagram
+        && config.INSTAGRAM_BROWSER_ENABLED === 'true'
+      ) {
+        if (fetchSignal.aborted || Date.now() >= fetchDeadline) throw new Error('instagram timeout');
+        const browserResult = await downloadInstagramWithBrowser(source.url, root, {
+          maxImages: config.GALLERY_MAX_IMAGES,
+          maxBytesPerImage: config.GALLERY_MAX_IMAGE_MB * 1024 * 1024,
+          signal: fetchSignal,
+        });
+        info = browserResult.info;
+        entries = await readdir(root);
+        inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      }
+    }
     clearInterval(monitor);
-    const entries = await readdir(root);
-    const inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
     if (!inputs.length) throw new Error('no images');
     const selected = inputs.slice(0, config.GALLERY_MAX_IMAGES);
     const output: string[] = [];
     let total = 0;
-    let info: Record<string, unknown> = {};
     for (const [index, filename] of selected.entries()) {
       const input = join(root, filename);
       const size = (await stat(input)).size;
       total += size;
       if (!size || size > config.GALLERY_MAX_IMAGE_MB * 1024 * 1024 || total > totalLimit) throw new Error('size');
-      if (index === 0) {
+      if (index === 0 && !Object.keys(info).length) {
         const metadataPath = input + '.json';
         if ((await stat(metadataPath)).size > config.GALLERY_METADATA_MAX_MB * 1024 * 1024) throw new Error('metadata size');
         const metadata: unknown = JSON.parse(await readFile(metadataPath, 'utf8'));
@@ -102,7 +152,7 @@ export async function maybeRepostGallery(ctx: Context) {
   if (!ctx.message?.text || !ctx.chat) return;
   const settings = await resolveChatSettings(ctx.chat.id);
   if (!settings.galleryEnabled) return;
-  const source = parseGalleryLink(ctx.message.text);
+  const source = parseGalleryLink(ctx.message.text, ctx.message.entities ?? []);
   if (source) {
     await enqueueMedia(ctx, () => repostGallery(ctx, source), { cooldownSeconds: settings.mediaCooldownSeconds });
   }

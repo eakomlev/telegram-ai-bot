@@ -1,12 +1,30 @@
 import { Bot, type Context } from 'grammy';
-import { config, allowedChatIds } from './config.js';
+import { config, allowedChatIds, ownerUserId } from './config.js';
 import { resolveChatSettings } from './chat-settings.js';
-import { pool, initializeDatabase, saveMessage, selectMessages, claimSummary, cleanup, deleteMessage, getOpenAiUsageTotals, recordOpenAiUsage } from './db.js';
+import {
+  pool,
+  initializeDatabase,
+  saveMessage,
+  selectMessages,
+  claimSummary,
+  cleanup,
+  deleteMessage,
+  getGlobalOpenAiUsageTotals,
+  getOpenAiUsageByChat,
+  getOpenAiUsageTotals,
+  countNewOpenAiUsageChats,
+  countOpenAiUsageChats,
+  getLatestChatMemberCounts,
+  getTotalLatestChatMembers,
+  recordOpenAiUsage,
+} from './db.js';
 import { summarize, type SummaryStyle } from './ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './settings-ui.js';
-import { formatUsageReport } from './usage.js';
+import { formatOwnerUsageReport, formatUsageReport } from './usage.js';
+import { runDailyMemberSnapshots } from './chat-members.js';
 
+import { runGifReaction } from './gif.js';
 import { maybeHandleMention, setBotIdentity } from './mention.js';
 import { maybeRepostVideo } from './video.js';
 import { maybeRepostGallery } from './gallery.js';
@@ -23,24 +41,54 @@ const help = `Я сохраняю текстовые сообщения и по�
 /summary 7d — за неделю
 /verse — то же самое, но саммари в стихах
 /verse 24h — стихотворное саммари за сутки
+/gif — по последним сообщениям подобрать шуточную GIF-реакцию
+/gif 40 — то же по 40 сообщениям (можно 24h / 7d)
 /settings — настройки группы (только администраторы)
 /usage — оценка расходов OpenAI по этой группе (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
 
 Упомяните меня (@бот) в сообщении — отвечу через OpenAI. Текст и картинки из сообщения и из цитаты учитываю как контекст; в ответе тоже могу прислать картинку.
+Если в запросе есть слова вроде «мем», «демотиватор», «drake» — сделаю мем-картинку.
 
-Отправьте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — я загружу видео с описанием.
+Отправьте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — я загружу видео без подписи.
 
 Ссылку на пост с картинками (Instagram, X, Reddit, Pixiv или Imgur) отправлю альбомом.
+Ссылку на товар Wildberries — пришлю фото и название.
 
 История до добавления бота недоступна. По умолчанию саммари могут запрашивать только администраторы.`;
 
+function isBotOwner(ctx: Context) {
+  return Boolean(ownerUserId && ctx.from?.id === ownerUserId && !ctx.msg?.sender_chat);
+}
+
+async function chatUsageLabel(chatId: number) {
+  try {
+    const chat = await bot.api.getChat(chatId);
+    const title = 'title' in chat && chat.title ? chat.title : undefined;
+    return title ? `${title} (${chatId})` : String(chatId);
+  } catch {
+    return String(chatId);
+  }
+}
+
 bot.use(async (ctx, next) => {
-  if (!ctx.chat || !['group', 'supergroup'].includes(ctx.chat.type)) {
-    if (ctx.message?.text?.startsWith('/')) await ctx.reply('Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.');
+  if (ctx.chat?.type === 'private') {
+    const text = ctx.message?.text ?? '';
+    if (isBotOwner(ctx) && /^\/stats(?:@\w+)?(?:\s|$)/i.test(text)) {
+      await next();
+      return;
+    }
+    if (text.startsWith('/')) {
+      await ctx.reply(
+        ownerUserId && isBotOwner(ctx)
+          ? 'В личке доступна только /stats — статистика OpenAI по всем группам.'
+          : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
+      );
+    }
     return;
   }
+  if (!ctx.chat || !['group', 'supergroup'].includes(ctx.chat.type)) return;
   if (allowedChatIds.size && !allowedChatIds.has(String(ctx.chat.id))) return;
   await next();
 });
@@ -59,10 +107,55 @@ bot.command('usage', async (ctx) => {
   ]);
   await ctx.reply(formatUsageReport(today, total), { link_preview_options: { is_disabled: true } });
 });
+bot.command('stats', async (ctx) => {
+  if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
+  if (!ownerUserId) {
+    await ctx.reply('Задайте OWNER_USER_ID в .env и перезапустите бота.');
+    return;
+  }
+  const startOfUtcDay = new Date();
+  startOfUtcDay.setUTCHours(0, 0, 0, 0);
+  const [today, total, chatRows, todayByChat, newGroupsToday, totalGroups, memberCounts, totalMembers] = await Promise.all([
+    getGlobalOpenAiUsageTotals(startOfUtcDay),
+    getGlobalOpenAiUsageTotals(),
+    getOpenAiUsageByChat(undefined, 30),
+    getOpenAiUsageByChat(startOfUtcDay, 100),
+    countNewOpenAiUsageChats(startOfUtcDay),
+    countOpenAiUsageChats(),
+    getLatestChatMemberCounts(),
+    getTotalLatestChatMembers(),
+  ]);
+  const todayMap = new Map(todayByChat.map((row) => [row.chatId, row]));
+  const emptyToday = {
+    requests: 0,
+    summaryRequests: 0,
+    mentionRequests: 0,
+    gifRequests: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    imageCount: 0,
+    estimatedCostUsd: 0,
+  };
+  const chats = await Promise.all(chatRows.map(async (row) => ({
+    chatId: row.chatId,
+    label: await chatUsageLabel(row.chatId),
+    today: todayMap.get(row.chatId) ?? emptyToday,
+    total: row,
+    members: memberCounts.get(row.chatId),
+  })));
+  const report = formatOwnerUsageReport(today, total, chats, {
+    newToday: newGroupsToday,
+    total: totalGroups,
+    members: totalMembers,
+  });
+  for (const part of splitReply(report, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
+    await ctx.reply(part, { link_preview_options: { is_disabled: true } });
+  }
+});
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст, подписи к медиа, отображаемое имя автора, время и ID сообщений в Postgres на ${config.RETENTION_DAYS} дней. ` +
-  `Учёт токенов и оценочных расходов OpenAI хранится ${config.USAGE_RETENTION_DAYS} дней. ` +
-  'При /summary и @упоминаниях данные уходят в OpenAI API; ответ виден участникам группы. ' +
+  `Учёт токенов и оценочных расходов OpenAI, а также ежедневные снимки числа участников групп, хранятся ${config.USAGE_RETENTION_DAYS} дней. ` +
+  'При /summary, /gif и @упоминаниях данные уходят в OpenAI API; для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
   'Ссылки на видео и посты с картинками передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
   'Администратору следует предупредить участников. Доступ и удаление данных — через владельца бота.',
 ));
@@ -151,6 +244,7 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
 
 bot.command('summary', (ctx) => runSummary(ctx, 'plain'));
 bot.command('verse', (ctx) => runSummary(ctx, 'verse'));
+bot.command('gif', (ctx) => runGifReaction(ctx));
 
 async function store(ctx: Context) {
   const message = ctx.message ?? ctx.editedMessage;
@@ -191,26 +285,36 @@ process.once('SIGTERM', () => { void shutdown(); });
 try {
   await initializeDatabase();
   await cleanup();
-  cleanupTimer = setInterval(
-    () => { void cleanup().catch(() => console.error('Retention cleanup failed')); },
-    config.RETENTION_CLEANUP_INTERVAL_MS,
-  );
+  cleanupTimer = setInterval(() => {
+    void cleanup().catch(() => console.error('Retention cleanup failed'));
+    void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
+  }, config.RETENTION_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
   const me = await bot.api.getMe();
   if (!me.username) throw new Error('Bot username is required for @mentions');
   setBotIdentity(me.id, me.username);
-  await bot.api.setMyCommands([
+  const groupCommands = [
     { command: 'summary', description: 'Саммари: N, 24h или 7d' },
     { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
+    { command: 'gif', description: 'Шуточная GIF по последним сообщениям' },
     { command: 'settings', description: 'Настройки группы (админы)' },
     { command: 'usage', description: 'Расходы OpenAI по группе (админы)' },
     { command: 'help', description: 'Как пользоваться ботом' },
     { command: 'privacy', description: 'Обработка данных' },
     { command: 'chatid', description: 'ID этой группы' },
-  ]);
+  ];
+  await bot.api.setMyCommands(groupCommands);
+  await bot.api.setMyCommands(groupCommands, { scope: { type: 'all_group_chats' } });
+  await bot.api.setMyCommands(
+    [{ command: 'stats', description: 'Расходы OpenAI по всем группам' }],
+    { scope: { type: 'all_private_chats' } },
+  );
   await bot.start({
     allowed_updates: ['message', 'edited_message', 'callback_query'],
-    onStart: () => console.log(`Telegram summary bot started as @${me.username}`),
+    onStart: () => {
+      console.log(`Telegram summary bot started as @${me.username}`);
+      void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
+    },
   });
 } catch {
   console.error('Startup or polling failed. Check configuration and service connectivity.');
