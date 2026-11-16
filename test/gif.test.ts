@@ -7,7 +7,7 @@ import { parseSelection } from '../src/summary.js';
 test('gif reaction prompt asks for JSON search query', () => {
   const prompt = buildGifReactionSystemPrompt(0);
   assert.match(prompt, /Giphy/);
-  assert.match(prompt, /по-русски для Giphy/);
+  assert.match(prompt, /на английском для Giphy/);
   assert.match(prompt, /query/);
   assert.match(prompt, /caption/);
   assert.match(prompt, /JSON/);
