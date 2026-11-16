@@ -4,12 +4,14 @@ import { resolveChatSettings } from './chat-settings.js';
 import { allowedChatIds, config } from './config.js';
 import {
   claimPendingAutoAnswer,
-  markAnsweredAutoAnswerFailed,
-  markPendingAutoAnswerReadyToSend,
+  isCancelableAutoAnswerStatus,
+  markPendingAutoAnswerSending,
   markPendingAutoAnswerStatus,
   markPendingAutoAnswerStatusWithClaim,
+  markSendingAutoAnswerAnswered,
+  markSendingAutoAnswerFailed,
   persistPendingAutoAnswerText,
-  reclaimAnsweredAutoAnswerForSendRetry,
+  reclaimSendingAutoAnswerForSendRetry,
   listDuePendingAutoAnswers,
   recordOpenAiUsage,
   type PendingAutoAnswer,
@@ -31,6 +33,13 @@ export function ownsAutoAnswerClaim(
     && row.claimedUntil != null
     && row.claimedUntil.getTime() === lease.getTime();
 }
+
+/** `sending` remains cancelable until Telegram ACK flips it to terminal `answered`. */
+export function isSendableAutoAnswerStatus(status: string): boolean {
+  return status === 'sending';
+}
+
+export { isCancelableAutoAnswerStatus };
 
 /** Skip OpenAI when a previous attempt already persisted the answer. */
 export function needsOpenAiGeneration(answerText: string | null | undefined) {
@@ -86,8 +95,8 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer, now: Date) {
   const answer = await ensureAnswerText(row, lease, settings.sarcasmLevel);
   if (!answer) return;
 
-  // Bind send to this claim token: cancel/steal loses; only the owner may flip to answered.
-  const ready = await markPendingAutoAnswerReadyToSend(row.chatId, row.messageId, lease);
+  // claimed → sending (still cancelable). Terminal answered only after Telegram ACK.
+  const ready = await markPendingAutoAnswerSending(row.chatId, row.messageId, lease);
   if (ready == null) return;
 
   try {
@@ -106,15 +115,38 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer, now: Date) {
       message: error instanceof Error ? error.message : String(error),
     });
     if (isPermanentTelegramDeliveryError(error)) {
-      await markAnsweredAutoAnswerFailed(row.chatId, row.messageId);
+      const failed = await markSendingAutoAnswerFailed(row.chatId, row.messageId, lease);
+      if (!failed) {
+        console.error('Auto-answer permanent fail mark skipped (cancelled or lease lost)', {
+          chatId: row.chatId,
+          messageId: row.messageId,
+        });
+      }
       return;
     }
-    // Keep answer_text and re-queue for send-only retry after a fresh lease (no OpenAI regen).
-    await reclaimAnsweredAutoAnswerForSendRetry(
+    // Send-only retry if still sending; human cancel wins and reclaim is a no-op.
+    const reclaimed = await reclaimSendingAutoAnswerForSendRetry(
       row.chatId,
       row.messageId,
+      lease,
       autoAnswerClaimLeaseUntil(now),
     );
+    if (!reclaimed) {
+      console.error('Auto-answer send retry reclaim skipped (cancelled or lease lost)', {
+        chatId: row.chatId,
+        messageId: row.messageId,
+      });
+    }
+    return;
+  }
+
+  const answered = await markSendingAutoAnswerAnswered(row.chatId, row.messageId, lease);
+  if (!answered) {
+    // Ambiguous ACK vs cancel/timeout: do not reclaim — avoids double-deliver.
+    console.error('Auto-answer mark-answered skipped after send (cancelled or lease lost)', {
+      chatId: row.chatId,
+      messageId: row.messageId,
+    });
   }
 }
 
@@ -136,16 +168,8 @@ export async function runAutoAnswerSchedulerTick(api: Api, now = new Date()) {
         messageId: claimed.messageId,
         message: error instanceof Error ? error.message : String(error),
       });
-      if (claimed.claimedUntil) {
-        await markPendingAutoAnswerStatusWithClaim(
-          claimed.chatId,
-          claimed.messageId,
-          claimed.claimedUntil,
-          'failed',
-        ).catch(() => {});
-      } else {
-        await markPendingAutoAnswerStatus(claimed.chatId, claimed.messageId, 'failed').catch(() => {});
-      }
+      // Covers claimed and cancelable sending left mid-flight.
+      await markPendingAutoAnswerStatus(claimed.chatId, claimed.messageId, 'failed').catch(() => {});
     }
   }
 }

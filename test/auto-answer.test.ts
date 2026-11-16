@@ -10,6 +10,8 @@ import {
 } from '../src/auto-answer.js';
 import {
   autoAnswerClaimLeaseUntil,
+  isCancelableAutoAnswerStatus,
+  isSendableAutoAnswerStatus,
   needsOpenAiGeneration,
   ownsAutoAnswerClaim,
 } from '../src/auto-answer-scheduler.js';
@@ -192,6 +194,18 @@ test('needsOpenAiGeneration skips when answer_text already persisted', () => {
   assert.equal(needsOpenAiGeneration(''), true);
   assert.equal(needsOpenAiGeneration('  '), true);
   assert.equal(needsOpenAiGeneration('Уже готовый ответ'), false);
+});
+
+test('cancelable statuses include sending but not terminal answered', () => {
+  assert.equal(isCancelableAutoAnswerStatus('pending'), true);
+  assert.equal(isCancelableAutoAnswerStatus('claimed'), true);
+  assert.equal(isCancelableAutoAnswerStatus('sending'), true);
+  assert.equal(isCancelableAutoAnswerStatus('answered'), false);
+  assert.equal(isCancelableAutoAnswerStatus('cancelled'), false);
+  assert.equal(isCancelableAutoAnswerStatus('failed'), false);
+  assert.equal(isSendableAutoAnswerStatus('sending'), true);
+  assert.equal(isSendableAutoAnswerStatus('answered'), false);
+  assert.equal(isSendableAutoAnswerStatus('claimed'), false);
 });
 
 test('auto-answer system prompt stays plain-text and brief', async () => {

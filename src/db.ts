@@ -444,7 +444,22 @@ export async function deleteChatSettings(chatId: number) {
   await pool.query('DELETE FROM chat_settings WHERE chat_id = $1', [String(chatId)]);
 }
 
-export type PendingAutoAnswerStatus = 'pending' | 'claimed' | 'answered' | 'cancelled' | 'failed';
+export type PendingAutoAnswerStatus =
+  | 'pending'
+  | 'claimed'
+  | 'sending'
+  | 'answered'
+  | 'cancelled'
+  | 'failed';
+
+/** Statuses that human engagement / settings-off may still cancel. */
+export const CANCELABLE_AUTO_ANSWER_STATUSES = ['pending', 'claimed', 'sending'] as const;
+
+export function isCancelableAutoAnswerStatus(status: string): boolean {
+  return (CANCELABLE_AUTO_ANSWER_STATUSES as readonly string[]).includes(status);
+}
+
+const CANCELABLE_STATUS_SQL = `'pending', 'claimed', 'sending'`;
 
 export type PendingAutoAnswer = {
   chatId: number;
@@ -532,7 +547,11 @@ export async function listDuePendingAutoAnswers(now: Date, limit = 50): Promise<
      WHERE due_at <= $1::timestamptz
        AND (
          status = 'pending'
-         OR (status = 'claimed' AND claimed_until IS NOT NULL AND claimed_until <= $1::timestamptz)
+         OR (
+           status IN ('claimed', 'sending')
+           AND claimed_until IS NOT NULL
+           AND claimed_until <= $1::timestamptz
+         )
        )
      ORDER BY due_at ASC
      LIMIT $2`,
@@ -555,7 +574,11 @@ export async function claimPendingAutoAnswer(
        AND due_at <= $4::timestamptz
        AND (
          status = 'pending'
-         OR (status = 'claimed' AND claimed_until IS NOT NULL AND claimed_until <= $4::timestamptz)
+         OR (
+           status IN ('claimed', 'sending')
+           AND claimed_until IS NOT NULL
+           AND claimed_until <= $4::timestamptz
+         )
        )
      RETURNING ${PENDING_AUTO_ANSWER_RETURNING}`,
     [String(chatId), messageId, leaseUntil, now],
@@ -572,7 +595,7 @@ export async function markPendingAutoAnswerStatus(
   await pool.query(
     `UPDATE pending_auto_answers
      SET status = $3, claimed_until = NULL
-     WHERE chat_id = $1 AND message_id = $2 AND status IN ('pending', 'claimed')`,
+     WHERE chat_id = $1 AND message_id = $2 AND status IN (${CANCELABLE_STATUS_SQL})`,
     [String(chatId), messageId, status],
   );
 }
@@ -597,17 +620,17 @@ export async function persistPendingAutoAnswerText(
 }
 
 /**
- * Atomically finish claim → answered before Telegram send, bound to this claim lease.
- * Returns the stored answer when this worker still owns the row.
+ * Atomically claim → sending before Telegram send, bound to this claim lease.
+ * `sending` stays cancelable; terminal `answered` is set only after ACK.
  */
-export async function markPendingAutoAnswerReadyToSend(
+export async function markPendingAutoAnswerSending(
   chatId: number,
   messageId: number,
   claimedUntil: Date,
 ): Promise<string | undefined> {
   const result = await pool.query<{ answer_text: string }>(
     `UPDATE pending_auto_answers
-     SET status = 'answered', claimed_until = NULL
+     SET status = 'sending'
      WHERE chat_id = $1
        AND message_id = $2
        AND status = 'claimed'
@@ -619,35 +642,66 @@ export async function markPendingAutoAnswerReadyToSend(
   return result.rows[0]?.answer_text;
 }
 
-/** After a failed send that already flipped to answered, re-queue for send-only retry. */
-export async function reclaimAnsweredAutoAnswerForSendRetry(
+/** Terminal success: only after Telegram send ACK, while still in cancelable `sending`. */
+export async function markSendingAutoAnswerAnswered(
   chatId: number,
   messageId: number,
-  leaseUntil: Date,
+  claimedUntil: Date,
 ): Promise<boolean> {
   const result = await pool.query(
     `UPDATE pending_auto_answers
-     SET status = 'claimed', claimed_until = $3::timestamptz
+     SET status = 'answered', claimed_until = NULL
      WHERE chat_id = $1
        AND message_id = $2
-       AND status = 'answered'
-       AND answer_text IS NOT NULL`,
-    [String(chatId), messageId, leaseUntil],
+       AND status = 'sending'
+       AND claimed_until = $3::timestamptz`,
+    [String(chatId), messageId, claimedUntil],
   );
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Fail-closed after permanent delivery error once the row was marked answered for send. */
-export async function markAnsweredAutoAnswerFailed(chatId: number, messageId: number) {
-  await pool.query(
+/**
+ * After a transient send failure, re-queue for send-only retry if still `sending`
+ * (human cancel / settings-off become cancelled and reclaim is a no-op).
+ */
+export async function reclaimSendingAutoAnswerForSendRetry(
+  chatId: number,
+  messageId: number,
+  claimedUntil: Date,
+  leaseUntil: Date,
+): Promise<boolean> {
+  const result = await pool.query(
     `UPDATE pending_auto_answers
-     SET status = 'failed', claimed_until = NULL
-     WHERE chat_id = $1 AND message_id = $2 AND status = 'answered'`,
-    [String(chatId), messageId],
+     SET status = 'claimed', claimed_until = $4::timestamptz
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND status = 'sending'
+       AND claimed_until = $3::timestamptz
+       AND answer_text IS NOT NULL`,
+    [String(chatId), messageId, claimedUntil, leaseUntil],
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
-/** Fail/cancel while still holding this specific claim lease. */
+/** Fail-closed after permanent delivery error while still in `sending`. */
+export async function markSendingAutoAnswerFailed(
+  chatId: number,
+  messageId: number,
+  claimedUntil: Date,
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = 'failed', claimed_until = NULL
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND status = 'sending'
+       AND claimed_until = $3::timestamptz`,
+    [String(chatId), messageId, claimedUntil],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Fail/cancel while still holding this specific claim lease (claimed only). */
 export async function markPendingAutoAnswerStatusWithClaim(
   chatId: number,
   messageId: number,
@@ -666,7 +720,7 @@ export async function markPendingAutoAnswerStatusWithClaim(
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Cancel pending/claimed rows that a later human message engages with. */
+/** Cancel pending/claimed/sending rows that a later human message engages with. */
 export async function cancelPendingAutoAnswersForScope(params: {
   chatId: number;
   replyToMessageId?: number;
@@ -678,7 +732,7 @@ export async function cancelPendingAutoAnswersForScope(params: {
     await pool.query(
       `UPDATE pending_auto_answers
        SET status = 'cancelled', claimed_until = NULL
-       WHERE chat_id = $1 AND message_id = $2 AND status IN ('pending', 'claimed')`,
+       WHERE chat_id = $1 AND message_id = $2 AND status IN (${CANCELABLE_STATUS_SQL})`,
       [String(chatId), replyToMessageId],
     );
   }
@@ -688,7 +742,7 @@ export async function cancelPendingAutoAnswersForScope(params: {
        SET status = 'cancelled', claimed_until = NULL
        WHERE chat_id = $1
          AND message_thread_id IS NOT DISTINCT FROM $2
-         AND status IN ('pending', 'claimed')`,
+         AND status IN (${CANCELABLE_STATUS_SQL})`,
       [String(chatId), messageThreadId ?? null],
     );
     return;
@@ -696,7 +750,7 @@ export async function cancelPendingAutoAnswersForScope(params: {
   await pool.query(
     `UPDATE pending_auto_answers
      SET status = 'cancelled', claimed_until = NULL
-     WHERE chat_id = $1 AND status IN ('pending', 'claimed')`,
+     WHERE chat_id = $1 AND status IN (${CANCELABLE_STATUS_SQL})`,
     [String(chatId)],
   );
 }
@@ -705,7 +759,7 @@ export async function cancelAllPendingAutoAnswersForChat(chatId: number) {
   await pool.query(
     `UPDATE pending_auto_answers
      SET status = 'cancelled', claimed_until = NULL
-     WHERE chat_id = $1 AND status IN ('pending', 'claimed')`,
+     WHERE chat_id = $1 AND status IN (${CANCELABLE_STATUS_SQL})`,
     [String(chatId)],
   );
 }
