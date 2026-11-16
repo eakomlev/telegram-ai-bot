@@ -569,6 +569,17 @@ export async function markPendingAutoAnswerStatus(
   );
 }
 
+/** True when the row is still claimed (not cancelled/answered while OpenAI ran). */
+export async function isPendingAutoAnswerStillClaimed(chatId: number, messageId: number): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM pending_auto_answers
+     WHERE chat_id = $1 AND message_id = $2 AND status = 'claimed'
+     LIMIT 1`,
+    [String(chatId), messageId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** Cancel pending/claimed rows that a later human message engages with. */
 export async function cancelPendingAutoAnswersForScope(params: {
   chatId: number;
