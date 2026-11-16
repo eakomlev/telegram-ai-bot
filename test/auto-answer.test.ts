@@ -3,10 +3,12 @@ import test from 'node:test';
 import type { Message } from 'grammy/types';
 import {
   activityCancelsPending,
+  formatAutoAnswerUserPrompt,
   isGeneralQuestion,
   isUrlOnlyMediaCandidate,
   messageHasAnyMention,
   shouldEnqueueAutoAnswer,
+  trimAutoAnswerContext,
 } from '../src/auto-answer.js';
 import {
   autoAnswerClaimLeaseUntil,
@@ -214,5 +216,60 @@ test('auto-answer system prompt stays plain-text and brief', async () => {
   assert.match(prompt, /никто не ответил/i);
   assert.match(prompt, /Не используй Markdown/);
   assert.match(prompt, /тёплый, живой и дружелюбный/);
+  assert.match(prompt, /недоверенные данные/i);
+  assert.match(prompt, /Не суммируй окно/i);
   assert.match(buildAutoAnswerSystemPrompt(100), /не обидно/);
+});
+
+test('formatAutoAnswerUserPrompt omits empty context and includes lines when present', () => {
+  const alone = formatAutoAnswerUserPrompt('Где парковка?', 'Ann');
+  assert.equal(
+    alone,
+    'Автор вопроса: Ann\nВопрос:\nГде парковка?',
+  );
+  assert.doesNotMatch(alone, /Контекст/);
+
+  const withContext = formatAutoAnswerUserPrompt('Где парковка?', 'Ann', [
+    { author: 'Bob', text: 'Ищем место у офиса' },
+    { author: 'Ann', text: 'Сегодня полно машин' },
+  ]);
+  assert.equal(
+    withContext,
+    [
+      'Контекст (недавние сообщения до вопроса):',
+      '[Bob]: Ищем место у офиса',
+      '[Ann]: Сегодня полно машин',
+      '',
+      'Автор вопроса: Ann',
+      'Вопрос:',
+      'Где парковка?',
+    ].join('\n'),
+  );
+});
+
+test('trimAutoAnswerContext drops oldest whole messages then truncates newest', () => {
+  assert.deepEqual(trimAutoAnswerContext([{ author: 'A', text: 'hi' }], 0), []);
+
+  const kept = trimAutoAnswerContext(
+    [
+      { author: 'Old', text: 'aaaaaaaaaa' },
+      { author: 'Mid', text: 'bbbbbbbbbb' },
+      { author: 'New', text: 'cccccccccc' },
+    ],
+    // '[New]: cccccccccc' is 16 chars; keep only the newest two if budget is tight.
+    40,
+  );
+  assert.deepEqual(
+    kept.map((row) => row.author),
+    ['Mid', 'New'],
+  );
+
+  const truncated = trimAutoAnswerContext(
+    [{ author: 'X', text: 'abcdefghijklmnopqrstuvwxyz' }],
+    12,
+  );
+  assert.equal(truncated.length, 1);
+  assert.equal(truncated[0]!.author, 'X');
+  assert.match(truncated[0]!.text, /…$/);
+  assert.ok(`[X]: ${truncated[0]!.text}`.length <= 12);
 });
