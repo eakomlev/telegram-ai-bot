@@ -1,9 +1,7 @@
 import type { Api } from 'grammy';
 import { replyToUnansweredQuestion } from './ai.js';
-import {
-  trimAutoAnswerContext,
-  type AutoAnswerContextMessage,
-} from './auto-answer.js';
+import type { ChatContextMessage } from './chat-context.js';
+import { trimPrecedingContext } from './chat-context.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { allowedChatIds, config } from './config.js';
 import {
@@ -18,7 +16,7 @@ import {
   reclaimSendingAutoAnswerForSendRetry,
   listDuePendingAutoAnswers,
   recordOpenAiUsage,
-  selectPrecedingMessagesForAutoAnswer,
+  selectPrecedingMessages,
   type PendingAutoAnswer,
 } from './db.js';
 import { isPermanentTelegramDeliveryError } from './news-scheduler.js';
@@ -56,18 +54,18 @@ function claimLeaseOrThrow(row: PendingAutoAnswer): Date {
   return row.claimedUntil;
 }
 
-async function loadAutoAnswerContext(row: PendingAutoAnswer): Promise<AutoAnswerContextMessage[]> {
+async function loadAutoAnswerContext(row: PendingAutoAnswer): Promise<ChatContextMessage[]> {
   if (config.AUTO_ANSWER_CONTEXT_MAX_MESSAGES <= 0) return [];
   try {
-    const rows = await selectPrecedingMessagesForAutoAnswer({
+    const rows = await selectPrecedingMessages({
       chatId: row.chatId,
-      questionMessageId: row.messageId,
-      questionCreatedAt: row.createdAt,
+      beforeMessageId: row.messageId,
+      beforeSentAt: row.createdAt,
       messageThreadId: row.messageThreadId,
       lookbackMinutes: config.AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES,
       maxMessages: config.AUTO_ANSWER_CONTEXT_MAX_MESSAGES,
     });
-    return trimAutoAnswerContext(
+    return trimPrecedingContext(
       rows.map((message) => ({ author: message.author, text: message.text })),
       config.AUTO_ANSWER_CONTEXT_MAX_CHARS,
     );

@@ -1,8 +1,6 @@
 import OpenAI from 'openai';
-import {
-  formatAutoAnswerUserPrompt,
-  type AutoAnswerContextMessage,
-} from './auto-answer.js';
+import { formatAutoAnswerUserPrompt } from './auto-answer.js';
+import type { ChatContextMessage } from './chat-context.js';
 import { config } from './config.js';
 import { moscowDateString } from './moscow-time.js';
 import { buildAiUsage, type AiUsage } from './usage.js';
