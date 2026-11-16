@@ -16,6 +16,14 @@ const client = new OpenAI({
 
 export type { AiUsage };
 
+/** GPT-6 Chat Completions need reasoning_effort=none for function calling (mention images). */
+export function chatCompletionModelOptions(model = config.OPENAI_MODEL) {
+  if (/^gpt-6/i.test(model)) {
+    return { model, reasoning_effort: 'none' as const };
+  }
+  return { model };
+}
+
 function sarcasmInstructions(level: number) {
   const value = Math.min(100, Math.max(0, Math.round(level)));
   if (value <= 0) {
@@ -135,7 +143,7 @@ export async function summarize(
   style: SummaryStyle = 'plain',
 ): Promise<{ text: string; usage: AiUsage }> {
   const result = await client.chat.completions.create({
-    model: config.OPENAI_MODEL,
+    ...chatCompletionModelOptions(),
     max_completion_tokens: config.MAX_OUTPUT_TOKENS,
     messages: [
       { role: 'system', content: buildSummarySystemPrompt(sarcasmLevel, style) },
@@ -261,7 +269,7 @@ export async function replyToMention(
   }
 
   const result = await client.chat.completions.create({
-    model: config.OPENAI_MODEL,
+    ...chatCompletionModelOptions(),
     max_completion_tokens: maxOutputTokens,
     messages: [
       {
@@ -341,7 +349,7 @@ ${sarcasmInstructions(Math.max(sarcasmLevel, 25))}
 
 export async function suggestGifReaction(json: string, sarcasmLevel = 0): Promise<GifReaction> {
   const result = await client.chat.completions.create({
-    model: config.OPENAI_MODEL,
+    ...chatCompletionModelOptions(),
     max_completion_tokens: 220,
     response_format: { type: 'json_object' },
     messages: [
@@ -393,7 +401,7 @@ export async function generateInterestingNews(
 ): Promise<{ text: string; usage: AiUsage }> {
   const moscowDay = moscowDateString();
   const result = await client.chat.completions.create({
-    model: config.OPENAI_MODEL,
+    ...chatCompletionModelOptions(),
     max_completion_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
     messages: [
       { role: 'system', content: buildNewsSystemPrompt(sphereLabelText) },
@@ -446,7 +454,7 @@ export async function replyToUnansweredQuestion(
   const prompt = questionText.trim().slice(0, config.AUTO_ANSWER_MAX_INPUT_CHARS);
   if (!prompt) throw new Error('Empty auto-answer question');
   const result = await client.chat.completions.create({
-    model: config.OPENAI_MODEL,
+    ...chatCompletionModelOptions(),
     max_completion_tokens: config.AUTO_ANSWER_MAX_OUTPUT_TOKENS,
     messages: [
       { role: 'system', content: buildAutoAnswerSystemPrompt(sarcasmLevel) },

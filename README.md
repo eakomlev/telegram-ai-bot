@@ -99,10 +99,10 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 
 | Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | Модель, поддерживающая Chat Completions и `max_completion_tokens` |
+| `OPENAI_MODEL` | `gpt-6-sol` | Модель Chat Completions; для `gpt-6*` бот ставит `reasoning_effort=none` (нужно для tool calling в @упоминаниях) |
 | `OPENAI_TIMEOUT_MS` / `OPENAI_MAX_RETRIES` | `90000` / `1` | Таймаут и число повторов OpenAI SDK |
 | `OPENAI_BASE_URL` | пусто | Опциональный совместимый endpoint |
-| `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `0.4` / `1.6` | Оценка $ за 1M токенов для `/usage` |
+| `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `2` / `10` | Оценка $ за 1M токенов для `/usage` |
 | `OPENAI_IMAGE_USD` | `0.011` | Оценка $ за одну сгенерированную картинку |
 | `USAGE_RETENTION_DAYS` | `90` | Срок хранения записей расходов OpenAI |
 | `GIPHY_API_KEY` | пусто | Ключ Giphy для `/gif` (без ключа команда недоступна) |

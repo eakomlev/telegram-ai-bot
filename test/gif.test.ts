@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildGifReactionSystemPrompt } from '../src/ai.js';
+import { buildGifReactionSystemPrompt, chatCompletionModelOptions } from '../src/ai.js';
 import { pickRandomUrl } from '../src/giphy.js';
 import { parseSelection } from '../src/summary.js';
 
@@ -11,6 +11,14 @@ test('gif reaction prompt asks for JSON search query', () => {
   assert.match(prompt, /query/);
   assert.match(prompt, /caption/);
   assert.match(prompt, /JSON/);
+});
+
+test('chatCompletionModelOptions sets reasoning_effort none for gpt-6', () => {
+  assert.deepEqual(chatCompletionModelOptions('gpt-6-sol'), {
+    model: 'gpt-6-sol',
+    reasoning_effort: 'none',
+  });
+  assert.deepEqual(chatCompletionModelOptions('gpt-4.1-mini'), { model: 'gpt-4.1-mini' });
 });
 
 test('parseSelection accepts /gif-sized counts', () => {
