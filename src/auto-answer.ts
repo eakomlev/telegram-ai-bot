@@ -12,7 +12,7 @@ import {
   enqueuePendingAutoAnswer,
 } from './db.js';
 import { parseGalleryLink } from './gallery-utils.js';
-import { messageMentionsBot } from './mention.js';
+import { messageAddressesBot } from './mention.js';
 import { parseVideoLink } from './video-utils.js';
 
 /** @deprecated Prefer ChatContextMessage — kept for existing imports/tests. */
@@ -125,7 +125,7 @@ export function shouldEnqueueAutoAnswer(message: Message): boolean {
   if (!text) return false;
   if (/^\/[\w]+(?:@\w+)?(?:\s|$)/.test(text)) return false;
   if (message.reply_to_message) return false;
-  if (messageMentionsBot(message)) return false;
+  if (messageAddressesBot(message)) return false;
   if (messageHasAnyMention(message)) return false;
   if (isUrlOnlyMediaCandidate(text, entitiesOf(message))) return false;
   return isGeneralQuestion(text);

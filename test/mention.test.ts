@@ -4,7 +4,9 @@ import {
   buildMentionPrompt,
   collectMessageImageFileIds,
   isMemeRequest,
+  messageAddressesBot,
   messageMentionsBot,
+  messageRepliesToBot,
   quotedContext,
   setBotIdentity,
   stripBotMention,
@@ -20,6 +22,7 @@ test('detects @username mention entity', () => {
     entities: [{ type: 'mention', offset: 7, length: 11 }],
   } as Message;
   assert.equal(messageMentionsBot(message), true);
+  assert.equal(messageAddressesBot(message), true);
 });
 
 test('detects text_mention of bot user id', () => {
@@ -36,6 +39,38 @@ test('ignores other mentions', () => {
     entities: [{ type: 'mention', offset: 7, length: 8 }],
   } as Message;
   assert.equal(messageMentionsBot(message), false);
+  assert.equal(messageAddressesBot(message), false);
+});
+
+test('detects reply to the bot own message without @mention', () => {
+  const message = {
+    text: 'а подробнее?',
+    reply_to_message: {
+      message_id: 9,
+      date: 1,
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 42, is_bot: true, first_name: 'SummaryBot' },
+      text: 'Краткий ответ бота',
+    },
+  } as Message;
+  assert.equal(messageMentionsBot(message), false);
+  assert.equal(messageRepliesToBot(message), true);
+  assert.equal(messageAddressesBot(message), true);
+});
+
+test('ignores reply to another user', () => {
+  const message = {
+    text: 'согласен',
+    reply_to_message: {
+      message_id: 8,
+      date: 1,
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 99, is_bot: false, first_name: 'Аня' },
+      text: 'Пойдём',
+    },
+  } as Message;
+  assert.equal(messageRepliesToBot(message), false);
+  assert.equal(messageAddressesBot(message), false);
 });
 
 test('strips bot mention from prompt text', () => {

@@ -41,6 +41,19 @@ export function messageMentionsBot(message: Message, identity = botIdentity): bo
   return false;
 }
 
+/** True when the user replies to one of the bot's own messages (quote/reply). */
+export function messageRepliesToBot(message: Message, identity = botIdentity): boolean {
+  if (!identity) return false;
+  const reply = message.reply_to_message;
+  if (!reply?.from) return false;
+  return reply.from.id === identity.id;
+}
+
+/** @mention of the bot or a reply to the bot's message. */
+export function messageAddressesBot(message: Message, identity = botIdentity): boolean {
+  return messageMentionsBot(message, identity) || messageRepliesToBot(message, identity);
+}
+
 /** Remove @bot mentions so the model sees the actual request. */
 export function stripBotMention(text: string, username: string, entities: MessageEntity[] = []): string {
   const ranges = entities
@@ -229,7 +242,7 @@ async function downloadTelegramImages(api: Api, fileIds: string[]): Promise<Ment
 
 export async function maybeHandleMention(ctx: Context): Promise<boolean> {
   if (config.MENTION_ENABLED !== 'true' || !ctx.message || !ctx.chat || !botIdentity) return false;
-  if (!messageMentionsBot(ctx.message)) return false;
+  if (!messageAddressesBot(ctx.message)) return false;
 
   const settings = await resolveChatSettings(ctx.chat.id);
   if (!settings.mentionEnabled) return false;
@@ -250,10 +263,13 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     fileIds.length > 0,
   );
   if (!draftPrompt && !fileIds.length) {
-    await ctx.reply('Напишите вопрос после упоминания бота, приложите картинку или ответьте цитатой на сообщение.', {
-      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-      ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
-    }).catch(() => {});
+    await ctx.reply(
+      'Напишите вопрос после упоминания бота, ответьте на моё сообщение, приложите картинку или ответьте цитатой на сообщение.',
+      {
+        reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+        ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
+      },
+    ).catch(() => {});
     return true;
   }
 
