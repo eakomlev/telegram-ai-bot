@@ -70,18 +70,39 @@ export function zonedMoscowTime(
 const NEWS_WINDOW_START_HOUR = 10;
 const NEWS_WINDOW_HOURS = 11; // [10:00, 21:00)
 
-/** Random minute in [10:00, 21:00) Moscow; if <= notBefore, same clock on the next Moscow day. */
-export function pickRandomNewsRunAt(notBefore: Date, random = Math.random): Date {
-  const offsetMinutes = Math.floor(random() * NEWS_WINDOW_HOURS * 60);
-  const hour = NEWS_WINDOW_START_HOUR + Math.floor(offsetMinutes / 60);
-  const minute = offsetMinutes % 60;
+function moscowNewsWindowBounds(parts: MoscowParts) {
+  const start = zonedMoscowTime(parts.year, parts.month, parts.day, NEWS_WINDOW_START_HOUR, 0);
+  const end = zonedMoscowTime(
+    parts.year,
+    parts.month,
+    parts.day,
+    NEWS_WINDOW_START_HOUR + NEWS_WINDOW_HOURS,
+    0,
+  );
+  return { start, end };
+}
 
-  const parts = moscowParts(notBefore);
-  let candidate = zonedMoscowTime(parts.year, parts.month, parts.day, hour, minute);
-  if (candidate.getTime() <= notBefore.getTime()) {
-    const noon = zonedMoscowTime(parts.year, parts.month, parts.day, 12, 0);
-    const nextParts = moscowParts(new Date(noon.getTime() + 24 * 60 * 60 * 1000));
-    candidate = zonedMoscowTime(nextParts.year, nextParts.month, nextParts.day, hour, minute);
+function nextMoscowCalendarDay(parts: MoscowParts): MoscowParts {
+  const noon = zonedMoscowTime(parts.year, parts.month, parts.day, 12, 0);
+  return moscowParts(new Date(noon.getTime() + 24 * 60 * 60 * 1000));
+}
+
+/**
+ * Random instant in today's remaining Moscow news window [10:00, 21:00),
+ * strictly after `notBefore`. If no time remains today, samples tomorrow's full window.
+ */
+export function pickRandomNewsRunAt(notBefore: Date, random = Math.random): Date {
+  let day = moscowParts(notBefore);
+  let { start, end } = moscowNewsWindowBounds(day);
+  let rangeStartMs = Math.max(start.getTime(), notBefore.getTime() + 1);
+
+  if (rangeStartMs >= end.getTime()) {
+    day = nextMoscowCalendarDay(day);
+    ({ start, end } = moscowNewsWindowBounds(day));
+    rangeStartMs = start.getTime();
   }
-  return candidate;
+
+  const spanMs = end.getTime() - rangeStartMs;
+  const offsetMs = Math.floor(random() * spanMs);
+  return new Date(rangeStartMs + offsetMs);
 }

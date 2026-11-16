@@ -1,8 +1,10 @@
 import type { Api } from 'grammy';
+import { GrammyError } from 'grammy';
 import { resolveChatSettings, type ChatSettings } from './chat-settings.js';
 import { allowedChatIds, config } from './config.js';
 import {
   claimNewsSend,
+  disableNewsForChat,
   getChatSettingsRow,
   listDueNewsChats,
   markNewsSent,
@@ -13,18 +15,58 @@ import { postNewsToChat } from './news.js';
 
 let newsTimer: NodeJS.Timeout | undefined;
 
-function nextDayNewsRunAt(now = new Date()) {
+const NEWS_CLAIM_LEASE_MS = 3 * 60_000;
+const RESCHEDULE_ATTEMPTS = 3;
+
+export function newsClaimLeaseUntil(now = new Date()) {
+  return new Date(now.getTime() + NEWS_CLAIM_LEASE_MS);
+}
+
+export function nextDayNewsRunAt(now = new Date()) {
   const parts = moscowParts(now);
   const endOfWindow = zonedMoscowTime(parts.year, parts.month, parts.day, 21, 0);
   return pickRandomNewsRunAt(endOfWindow);
 }
 
-function softRetryAt(now = new Date()) {
+export function softRetryAt(now = new Date(), retryMinutes = config.NEWS_RETRY_MINUTES) {
   const parts = moscowParts(now);
   const endOfWindow = zonedMoscowTime(parts.year, parts.month, parts.day, 21, 0);
-  const retry = new Date(now.getTime() + config.NEWS_RETRY_MINUTES * 60_000);
+  const retry = new Date(now.getTime() + retryMinutes * 60_000);
   if (retry.getTime() < endOfWindow.getTime()) return retry;
   return nextDayNewsRunAt(now);
+}
+
+/** Permanent delivery failures: stop scheduling instead of burning OpenAI retries. */
+export function isPermanentTelegramDeliveryError(error: unknown): boolean {
+  if (!(error instanceof GrammyError)) return false;
+  if (error.error_code === 403) return true;
+  const description = error.description.toLowerCase();
+  return (
+    description.includes('chat not found')
+    || description.includes('bot was kicked')
+    || description.includes('bot is not a member')
+    || description.includes('group chat was upgraded')
+  );
+}
+
+async function rescheduleNewsRunWithRetry(chatId: number, nextRunAt: Date) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= RESCHEDULE_ATTEMPTS; attempt += 1) {
+    try {
+      await rescheduleNewsRun(chatId, nextRunAt);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.error('Daily news reschedule failed', {
+        chatId,
+        attempt,
+        nextRunAt: nextRunAt.toISOString(),
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  // Lease remains claimable after expiry even if every reschedule attempt fails.
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /** Ensure next_run is set when news is on with spheres; clear it when off or empty. Does not touch last_sent_on. */
@@ -50,18 +92,33 @@ export async function runNewsSchedulerTick(api: Api, now = new Date()) {
   }
   const moscowDate = moscowDateString(now);
   for (const chat of due) {
-    const nextRunAt = nextDayNewsRunAt(now);
-    const claimed = await claimNewsSend(chat.chatId, moscowDate, nextRunAt);
+    const leaseUntil = newsClaimLeaseUntil(now);
+    const claimed = await claimNewsSend(chat.chatId, moscowDate, leaseUntil, now);
     if (!claimed) continue;
     try {
       await postNewsToChat(api, chat.chatId, claimed.newsSpheres);
-      await markNewsSent(chat.chatId, moscowDate);
+      await markNewsSent(chat.chatId, moscowDate, nextDayNewsRunAt(now));
     } catch (error) {
       console.error('Daily news send failed', {
         chatId: chat.chatId,
         message: error instanceof Error ? error.message : String(error),
       });
-      await rescheduleNewsRun(chat.chatId, softRetryAt(now)).catch(() => {});
+      if (isPermanentTelegramDeliveryError(error)) {
+        try {
+          await disableNewsForChat(chat.chatId);
+        } catch (disableError) {
+          console.error('Daily news disable failed', {
+            chatId: chat.chatId,
+            message: disableError instanceof Error ? disableError.message : String(disableError),
+          });
+        }
+        continue;
+      }
+      try {
+        await rescheduleNewsRunWithRetry(chat.chatId, softRetryAt(now));
+      } catch {
+        // next_run stays on the short claim lease and becomes due again after it expires
+      }
     }
   }
 }

@@ -341,11 +341,15 @@ export async function listDueNewsChats(now: Date): Promise<DueNewsChat[]> {
   }));
 }
 
-/** Atomically claim a due news send and move next_run forward. Returns spheres if claimed. */
+/**
+ * Atomically claim a due news send with a short in-progress lease on news_next_run_at.
+ * Does not mark the day as sent; caller must markNewsSent or soft-reschedule after send.
+ */
 export async function claimNewsSend(
   chatId: number,
   moscowDate: string,
-  nextRunAt: Date,
+  leaseUntil: Date,
+  now: Date,
 ): Promise<DueNewsChat | undefined> {
   const result = await pool.query<{ chat_id: string; news_spheres: string[] }>(
     `UPDATE chat_settings
@@ -354,22 +358,25 @@ export async function claimNewsSend(
        AND news_enabled = true
        AND cardinality(news_spheres) > 0
        AND news_next_run_at IS NOT NULL
-       AND news_next_run_at <= now()
+       AND news_next_run_at <= $4::timestamptz
        AND (news_last_sent_on IS NULL OR news_last_sent_on < $2::date)
      RETURNING chat_id::text AS chat_id, news_spheres`,
-    [String(chatId), moscowDate, nextRunAt],
+    [String(chatId), moscowDate, leaseUntil, now],
   );
   const row = result.rows[0];
   if (!row) return;
   return { chatId: Number(row.chat_id), newsSpheres: row.news_spheres ?? [] };
 }
 
-export async function markNewsSent(chatId: number, moscowDate: string) {
+/** Mark today's send and schedule the next day's window in one update. */
+export async function markNewsSent(chatId: number, moscowDate: string, nextRunAt: Date) {
   await pool.query(
     `UPDATE chat_settings
-     SET news_last_sent_on = $2::date, updated_at = now()
+     SET news_last_sent_on = $2::date,
+         news_next_run_at = $3::timestamptz,
+         updated_at = now()
      WHERE chat_id = $1`,
-    [String(chatId), moscowDate],
+    [String(chatId), moscowDate, nextRunAt],
   );
 }
 
@@ -379,6 +386,16 @@ export async function rescheduleNewsRun(chatId: number, nextRunAt: Date | null) 
      SET news_next_run_at = $2::timestamptz, updated_at = now()
      WHERE chat_id = $1`,
     [String(chatId), nextRunAt],
+  );
+}
+
+/** Stop daily news for a chat that can no longer receive messages (403 / kicked / gone). */
+export async function disableNewsForChat(chatId: number) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET news_enabled = false, news_next_run_at = NULL, updated_at = now()
+     WHERE chat_id = $1`,
+    [String(chatId)],
   );
 }
 

@@ -42,9 +42,26 @@ test('pickRandomNewsRunAt stays in [10:00, 21:00) Moscow', () => {
   assert.ok(lateParts.minute >= 59);
 });
 
-test('pickRandomNewsRunAt rolls to next Moscow day when candidate is not after notBefore', () => {
-  const notBefore = zonedMoscowTime(2024, 3, 10, 12, 0);
-  const runAt = pickRandomNewsRunAt(notBefore, () => 0); // would be 10:00 same day
+test('pickRandomNewsRunAt samples remaining window when enabling during the day', () => {
+  const notBefore = zonedMoscowTime(2024, 3, 10, 15, 0);
+  const earliest = pickRandomNewsRunAt(notBefore, () => 0);
+  assert.ok(earliest.getTime() > notBefore.getTime());
+  assert.ok(earliest.getTime() < zonedMoscowTime(2024, 3, 10, 21, 0).getTime());
+  const earlyParts = moscowParts(earliest);
+  assert.equal(earlyParts.day, 10);
+  assert.equal(earlyParts.hour, 15);
+  assert.equal(earlyParts.minute, 0);
+
+  const latest = pickRandomNewsRunAt(notBefore, () => 0.999999);
+  const lateParts = moscowParts(latest);
+  assert.equal(lateParts.day, 10);
+  assert.equal(lateParts.hour, 20);
+  assert.ok(lateParts.minute >= 59);
+});
+
+test('pickRandomNewsRunAt rolls to next Moscow day after the 21:00 window', () => {
+  const notBefore = zonedMoscowTime(2024, 3, 10, 21, 0);
+  const runAt = pickRandomNewsRunAt(notBefore, () => 0);
   const parts = moscowParts(runAt);
   assert.equal(parts.day, 11);
   assert.equal(parts.hour, 10);
