@@ -1,9 +1,14 @@
 import { InputFile, type Api, type Context } from 'grammy';
 import type { Message, MessageEntity } from 'grammy/types';
 import { replyToMention, type MentionInputImage } from './ai.js';
+import {
+  formatContextLine,
+  trimPrecedingContext,
+  type ChatContextMessage,
+} from './chat-context.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { config } from './config.js';
-import { recordOpenAiUsage } from './db.js';
+import { recordOpenAiUsage, selectPrecedingMessages } from './db.js';
 import { splitReply } from './summary.js';
 import { startStatus } from './status.js';
 
@@ -97,12 +102,16 @@ export function isMemeRequest(text: string): boolean {
   return false;
 }
 
-/** Prefer keeping the user request; trim the quote first if over budget. */
+/**
+ * Prefer keeping the user request, then the quote; drop/truncate preceding first.
+ * Empty preceding keeps the previous quote+request format unchanged.
+ */
 export function buildMentionPrompt(
   userText: string,
   quoted: { author: string; text: string } | undefined,
   maxChars: number,
   hasImages = false,
+  preceding: ChatContextMessage[] = [],
 ): string {
   const request = userText.trim()
     || (quoted || hasImages ? 'Опиши и прокомментируй по делу с учётом контекста и изображений.' : '');
@@ -112,12 +121,42 @@ export function buildMentionPrompt(
   const header = `Цитата (${quoted.author}):\n`;
   const footer = `\n\nЗапрос:\n${request}`;
   const budget = maxChars - header.length - footer.length;
+  // Quote+request barely fit — omit preceding entirely (same compact path as before).
   if (budget < 40) {
     const compact = `Цитата: ${quoted.text}\n\nЗапрос: ${request}`;
     return compact.length > maxChars ? `${compact.slice(0, maxChars)}…` : compact;
   }
   const quote = quoted.text.length > budget ? `${quoted.text.slice(0, budget)}…` : quoted.text;
-  return `${header}${quote}${footer}`;
+  const quoteAndRequest = `${header}${quote}${footer}`;
+
+  const contextLines = preceding
+    .map(formatContextLine)
+    .filter((line) => !/^\[.+\]:\s*$/.test(line));
+  if (!contextLines.length) return quoteAndRequest;
+
+  const contextHeader = 'Контекст (сообщения до цитаты):\n';
+  const separator = '\n\n';
+  const contextBudget = maxChars - contextHeader.length - separator.length - quoteAndRequest.length;
+  if (contextBudget < 1) return quoteAndRequest;
+
+  // Drop oldest whole lines first; truncate the newest remaining line if still over.
+  const selected = [...contextLines];
+  const joinedLen = () => selected.join('\n').length;
+  while (selected.length > 1 && joinedLen() > contextBudget) {
+    selected.shift();
+  }
+  if (selected.length === 0) return quoteAndRequest;
+
+  let contextBody = selected.join('\n');
+  if (contextBody.length > contextBudget) {
+    const ellipsis = '…';
+    const keep = Math.max(0, contextBudget - ellipsis.length);
+    contextBody = `${contextBody.slice(0, keep)}${ellipsis}`;
+  }
+  if (!contextBody.trim()) return quoteAndRequest;
+
+  const result = `${contextHeader}${contextBody}${separator}${quoteAndRequest}`;
+  return result.length > maxChars ? `${result.slice(0, maxChars)}…` : result;
 }
 
 function claimMentionSlot(chatId: number) {
@@ -175,11 +214,38 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     ...collectMessageImageFileIds(ctx.message),
     ...collectMessageImageFileIds(ctx.message.reply_to_message),
   ];
+
+  let preceding: ChatContextMessage[] = [];
+  const replyTo = ctx.message.reply_to_message;
+  if (replyTo && config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
+    try {
+      const rows = await selectPrecedingMessages({
+        chatId: ctx.chat.id,
+        beforeMessageId: replyTo.message_id,
+        beforeSentAt: new Date(replyTo.date * 1000),
+        messageThreadId: replyTo.message_thread_id ?? ctx.message.message_thread_id ?? null,
+        lookbackMinutes: config.MENTION_CONTEXT_LOOKBACK_MINUTES,
+        maxMessages: config.MENTION_CONTEXT_MAX_MESSAGES,
+      });
+      preceding = trimPrecedingContext(
+        rows.map((message) => ({ author: message.author, text: message.text })),
+        config.MENTION_CONTEXT_MAX_CHARS,
+      );
+    } catch (error) {
+      console.error('Mention quote context load failed', {
+        chatId: ctx.chat.id,
+        messageId: replyTo.message_id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const prompt = buildMentionPrompt(
     userText,
     quoted,
     config.MENTION_MAX_INPUT_CHARS,
     fileIds.length > 0,
+    preceding,
   );
   if (!prompt && !fileIds.length) {
     await ctx.reply('Напишите вопрос после упоминания бота, приложите картинку или ответьте цитатой на сообщение.', {

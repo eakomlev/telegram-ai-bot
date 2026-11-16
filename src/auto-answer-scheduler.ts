@@ -1,7 +1,6 @@
 import type { Api } from 'grammy';
 import { replyToUnansweredQuestion } from './ai.js';
-import type { ChatContextMessage } from './chat-context.js';
-import { trimPrecedingContext } from './chat-context.js';
+import { trimPrecedingContext, type ChatContextMessage } from './chat-context.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { allowedChatIds, config } from './config.js';
 import {

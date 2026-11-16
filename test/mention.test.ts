@@ -49,6 +49,80 @@ test('builds prompt with quoted reply context', () => {
   assert.match(prompt, /Цитата \(Аня\):/);
   assert.match(prompt, /Сделаем завтра/);
   assert.match(prompt, /Запрос:\nчто он имел в виду\?/);
+  assert.doesNotMatch(prompt, /Контекст/);
+});
+
+test('empty preceding leaves quote+request format unchanged', () => {
+  const without = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, 1500);
+  const withEmpty = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, 1500, false, []);
+  assert.equal(withEmpty, without);
+});
+
+test('includes preceding messages before the quote', () => {
+  const prompt = buildMentionPrompt(
+    'что он имел в виду?',
+    { author: 'Аня', text: 'Сделаем завтра' },
+    1500,
+    false,
+    [
+      { author: 'Боря', text: 'Кто свободен?' },
+      { author: 'Аня', text: 'Я могу после обеда' },
+    ],
+  );
+  assert.equal(
+    prompt,
+    [
+      'Контекст (сообщения до цитаты):',
+      '[Боря]: Кто свободен?',
+      '[Аня]: Я могу после обеда',
+      '',
+      'Цитата (Аня):',
+      'Сделаем завтра',
+      '',
+      'Запрос:',
+      'что он имел в виду?',
+    ].join('\n'),
+  );
+});
+
+test('drops preceding before truncating quote or request when budget is tight', () => {
+  const request = 'что имелось в виду?';
+  const quote = 'x'.repeat(80);
+  // Barely enough for quote+request (budget ≥ 40), little room for preceding.
+  const maxChars = `Цитата (Аня):\n${quote}\n\nЗапрос:\n${request}`.length + 10;
+  const prompt = buildMentionPrompt(
+    request,
+    { author: 'Аня', text: quote },
+    maxChars,
+    false,
+    [
+      { author: 'Old', text: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      { author: 'Mid', text: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+    ],
+  );
+  assert.doesNotMatch(prompt, /Контекст/);
+  assert.match(prompt, /Цитата \(Аня\):/);
+  assert.match(prompt, new RegExp(`Запрос:\\n${request}`));
+  assert.ok(prompt.length <= maxChars);
+});
+
+test('omits preceding when quote+request budget is under 40', () => {
+  const request = 'ок?';
+  const quote = 'коротко';
+  // Force compact path: header+footer leave < 40 for the quote body.
+  const header = 'Цитата (Аня):\n';
+  const footer = `\n\nЗапрос:\n${request}`;
+  const maxChars = header.length + footer.length + 10;
+  const prompt = buildMentionPrompt(
+    request,
+    { author: 'Аня', text: quote },
+    maxChars,
+    false,
+    [{ author: 'Боря', text: 'контекст который не должен попасть' }],
+  );
+  assert.doesNotMatch(prompt, /Контекст/);
+  assert.doesNotMatch(prompt, /контекст который не должен попасть/);
+  assert.match(prompt, /Запрос: ок\?/);
 });
 
 test('quote-only mention gets a default request', () => {
