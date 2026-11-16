@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { getChatSettingsRow, upsertChatSettings, type ChatSettingsRow } from './db.js';
+import { sanitizeSpheres, sphereLabel, type NewsSphereId } from './news-spheres.js';
 
 export type ChatSettings = {
   summaryAdminOnly: boolean;
@@ -9,6 +10,8 @@ export type ChatSettings = {
   mediaCooldownSeconds: number;
   sarcasmLevel: number;
   mentionEnabled: boolean;
+  newsEnabled: boolean;
+  newsSpheres: NewsSphereId[];
 };
 
 const COUNT_STEPS = [50, 100, 200, 500, 1000];
@@ -24,6 +27,8 @@ export function defaultChatSettings(): ChatSettings {
     mediaCooldownSeconds: config.MEDIA_COOLDOWN_SECONDS ?? config.VIDEO_COOLDOWN_SECONDS,
     sarcasmLevel: config.SUMMARY_SARCASM_PERCENT,
     mentionEnabled: config.MENTION_ENABLED === 'true',
+    newsEnabled: false,
+    newsSpheres: [],
   };
 }
 
@@ -36,6 +41,8 @@ function fromRow(row: ChatSettingsRow): ChatSettings {
     mediaCooldownSeconds: row.media_cooldown_seconds,
     sarcasmLevel: row.sarcasm_level,
     mentionEnabled: row.mention_enabled ?? true,
+    newsEnabled: row.news_enabled ?? false,
+    newsSpheres: sanitizeSpheres(row.news_spheres ?? []),
   };
 }
 
@@ -60,6 +67,8 @@ export async function resolveChatSettings(chatId: number): Promise<ChatSettings>
     mediaCooldownSeconds: clampCooldown(row.media_cooldown_seconds),
     sarcasmLevel: clampSarcasm(row.sarcasm_level ?? 0),
     mentionEnabled: row.mention_enabled ?? defaultChatSettings().mentionEnabled,
+    newsEnabled: row.news_enabled ?? false,
+    newsSpheres: sanitizeSpheres(row.news_spheres ?? []),
   };
 }
 
@@ -69,6 +78,7 @@ export async function saveChatSettings(chatId: number, settings: ChatSettings) {
     defaultMessageCount: clampCount(settings.defaultMessageCount),
     mediaCooldownSeconds: clampCooldown(settings.mediaCooldownSeconds),
     sarcasmLevel: clampSarcasm(settings.sarcasmLevel),
+    newsSpheres: sanitizeSpheres(settings.newsSpheres),
   };
   await upsertChatSettings(chatId, {
     summary_admin_only: next.summaryAdminOnly,
@@ -78,6 +88,10 @@ export async function saveChatSettings(chatId: number, settings: ChatSettings) {
     media_cooldown_seconds: next.mediaCooldownSeconds,
     sarcasm_level: next.sarcasmLevel,
     mention_enabled: next.mentionEnabled,
+    news_enabled: next.newsEnabled,
+    news_spheres: next.newsSpheres,
+    news_next_run_at: null,
+    news_last_sent_on: null,
   });
   return next;
 }
@@ -103,6 +117,9 @@ export function cycleSarcasmLevel(current: number) {
 
 export function formatSettings(settings: ChatSettings) {
   const on = (value: boolean) => (value ? 'вкл' : 'выкл');
+  const spheres = settings.newsSpheres.length
+    ? settings.newsSpheres.map((id) => sphereLabel(id)).join(', ')
+    : 'не выбраны';
   return [
     'Настройки этой группы (видят и меняют только администраторы):',
     '',
@@ -113,5 +130,7 @@ export function formatSettings(settings: ChatSettings) {
     `• Автозагрузка видео: ${on(settings.videoEnabled)}`,
     `• Автозагрузка картинок: ${on(settings.galleryEnabled)}`,
     `• Пауза между медиа-ссылками: ${settings.mediaCooldownSeconds} сек.`,
+    `• Ежедневная новость: ${on(settings.newsEnabled)}`,
+    `• Сферы новостей: ${spheres}`,
   ].join('\n');
 }
