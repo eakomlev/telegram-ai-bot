@@ -30,8 +30,9 @@ test('defaults and format mention admin-only controls', () => {
 });
 
 test('summary prompt stays factual and softens high sarcasm', () => {
-  assert.match(buildSummarySystemPrompt(0), /нейтральный/);
-  assert.match(buildSummarySystemPrompt(0), /🔥 Главное/);
+  assert.match(buildSummarySystemPrompt(0), /тёплый, живой и дружелюбный/);
+  assert.match(buildSummarySystemPrompt(0), /🎬 Коротко/);
+  assert.match(buildSummarySystemPrompt(0), /досугового чата коллег/);
   assert.match(buildSummarySystemPrompt(0), /друг, который прочитал весь чат/);
   assert.match(buildSummarySystemPrompt(100), /не обидно/);
   assert.match(buildSummarySystemPrompt(100), /Не придумывай факты/);
@@ -42,6 +43,6 @@ test('verse summary prompt is a separate humorous poem brief', () => {
   assert.match(prompt, /талантливый поэт/);
   assert.match(prompt, /четверостиший/);
   assert.match(prompt, /Не придумывай события/);
-  assert.doesNotMatch(prompt, /🔥 Главное/);
-  assert.match(prompt, /нейтральный/);
+  assert.doesNotMatch(prompt, /🎬 Коротко/);
+  assert.match(prompt, /тёплый, живой и дружелюбный/);
 });
