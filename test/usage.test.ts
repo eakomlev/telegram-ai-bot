@@ -10,9 +10,9 @@ import {
 } from '../src/usage.js';
 
 test('estimates text cost from env prices', () => {
-  // 1M in + 1M out at defaults 0.4 / 1.6
-  assert.equal(estimateTextCostUsd(1_000_000, 1_000_000), 2);
-  assert.ok(Math.abs(estimateTextCostUsd(1000, 500) - 0.0012) < 1e-9);
+  // 1M in + 1M out at defaults 2 / 10 (gpt-6-sol)
+  assert.equal(estimateTextCostUsd(1_000_000, 1_000_000), 12);
+  assert.ok(Math.abs(estimateTextCostUsd(1000, 500) - 0.007) < 1e-9);
 });
 
 test('estimates image cost', () => {
@@ -22,12 +22,12 @@ test('estimates image cost', () => {
 
 test('buildAiUsage combines text and images', () => {
   const usage = buildAiUsage({
-    model: 'gpt-4.1-mini',
+    model: 'gpt-6-sol',
     promptTokens: 1_000_000,
     completionTokens: 0,
     imageCount: 1,
   });
-  assert.equal(usage.estimatedCostUsd, 0.4 + 0.011);
+  assert.equal(usage.estimatedCostUsd, 2 + 0.011);
   assert.equal(usage.imageCount, 1);
 });
 
