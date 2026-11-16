@@ -22,10 +22,12 @@ test('cycles sarcasm level from 0 to 100', () => {
 
 test('defaults and format mention admin-only controls', () => {
   const settings = defaultChatSettings();
+  assert.equal(settings.autoAnswerEnabled, false);
   const text = formatSettings(settings);
   assert.match(text, /Саммари только админам/);
   assert.match(text, /Автозагрузка видео/);
   assert.match(text, /Сарказм:/);
+  assert.match(text, /Автоответ на вопросы без ответа: выкл/);
   assert.match(text, /Ежедневная новость: выкл/);
   assert.match(text, /Сферы новостей: не выбраны/);
   assert.match(text, new RegExp(String(settings.defaultMessageCount)));

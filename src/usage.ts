@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import type { OpenAiUsageTotals } from './db.js';
 
-export type UsageKind = 'summary' | 'mention' | 'gif' | 'news';
+export type UsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer';
 
 export type AiUsage = {
   model: string;
@@ -57,7 +57,7 @@ function formatPeriod(label: string, totals: OpenAiUsageTotals, extraLines: stri
   const tokens = totals.promptTokens + totals.completionTokens;
   return [
     `${label}: ${formatUsd(totals.estimatedCostUsd)}`,
-    `  запросов: ${totals.requests} (саммари ${totals.summaryRequests}, @упоминания ${totals.mentionRequests}, gif ${totals.gifRequests}, новости ${totals.newsRequests})`,
+    `  запросов: ${totals.requests} (саммари ${totals.summaryRequests}, @упоминания ${totals.mentionRequests}, gif ${totals.gifRequests}, новости ${totals.newsRequests}, автоответ ${totals.autoAnswerRequests})`,
     `  токены: ${formatTokens(tokens)} (in ${formatTokens(totals.promptTokens)} / out ${formatTokens(totals.completionTokens)})`,
     `  картинки: ${totals.imageCount}`,
     ...extraLines.map((line) => `  ${line}`),
