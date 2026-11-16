@@ -4,7 +4,9 @@ import {
   buildMentionPrompt,
   collectMessageImageFileIds,
   isMemeRequest,
+  messageAddressesBot,
   messageMentionsBot,
+  messageRepliesToBot,
   quotedContext,
   setBotIdentity,
   stripBotMention,
@@ -20,6 +22,7 @@ test('detects @username mention entity', () => {
     entities: [{ type: 'mention', offset: 7, length: 11 }],
   } as Message;
   assert.equal(messageMentionsBot(message), true);
+  assert.equal(messageAddressesBot(message), true);
 });
 
 test('detects text_mention of bot user id', () => {
@@ -36,6 +39,38 @@ test('ignores other mentions', () => {
     entities: [{ type: 'mention', offset: 7, length: 8 }],
   } as Message;
   assert.equal(messageMentionsBot(message), false);
+  assert.equal(messageAddressesBot(message), false);
+});
+
+test('detects reply to the bot own message without @mention', () => {
+  const message = {
+    text: 'а подробнее?',
+    reply_to_message: {
+      message_id: 9,
+      date: 1,
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 42, is_bot: true, first_name: 'SummaryBot' },
+      text: 'Краткий ответ бота',
+    },
+  } as Message;
+  assert.equal(messageMentionsBot(message), false);
+  assert.equal(messageRepliesToBot(message), true);
+  assert.equal(messageAddressesBot(message), true);
+});
+
+test('ignores reply to another user', () => {
+  const message = {
+    text: 'согласен',
+    reply_to_message: {
+      message_id: 8,
+      date: 1,
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 99, is_bot: false, first_name: 'Аня' },
+      text: 'Пойдём',
+    },
+  } as Message;
+  assert.equal(messageRepliesToBot(message), false);
+  assert.equal(messageAddressesBot(message), false);
 });
 
 test('strips bot mention from prompt text', () => {
@@ -49,6 +84,109 @@ test('builds prompt with quoted reply context', () => {
   assert.match(prompt, /Цитата \(Аня\):/);
   assert.match(prompt, /Сделаем завтра/);
   assert.match(prompt, /Запрос:\nчто он имел в виду\?/);
+  assert.doesNotMatch(prompt, /Контекст/);
+});
+
+test('empty preceding leaves quote+request format unchanged', () => {
+  const without = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, 1500);
+  const withEmpty = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, 1500, false, []);
+  assert.equal(withEmpty, without);
+});
+
+test('includes preceding messages before the quote', () => {
+  const prompt = buildMentionPrompt(
+    'что он имел в виду?',
+    { author: 'Аня', text: 'Сделаем завтра' },
+    1500,
+    false,
+    [
+      { author: 'Боря', text: 'Кто свободен?' },
+      { author: 'Аня', text: 'Я могу после обеда' },
+    ],
+  );
+  assert.equal(
+    prompt,
+    [
+      'Контекст (сообщения до цитаты):',
+      '[Боря]: Кто свободен?',
+      '[Аня]: Я могу после обеда',
+      '',
+      'Цитата (Аня):',
+      'Сделаем завтра',
+      '',
+      'Запрос:',
+      'что он имел в виду?',
+    ].join('\n'),
+  );
+});
+
+test('includes preceding messages for a plain mention without quote', () => {
+  const prompt = buildMentionPrompt(
+    'что решили?',
+    undefined,
+    1500,
+    false,
+    [
+      { author: 'Боря', text: 'Может в пятницу?' },
+      { author: 'Аня', text: 'Да, давайте' },
+    ],
+  );
+  assert.equal(
+    prompt,
+    [
+      'Контекст (недавние сообщения):',
+      '[Боря]: Может в пятницу?',
+      '[Аня]: Да, давайте',
+      '',
+      'Запрос:',
+      'что решили?',
+    ].join('\n'),
+  );
+});
+
+test('plain mention without preceding stays a bare request', () => {
+  assert.equal(buildMentionPrompt('привет', undefined, 1500), 'привет');
+  assert.equal(buildMentionPrompt('привет', undefined, 1500, false, []), 'привет');
+});
+
+test('drops preceding before truncating quote or request when budget is tight', () => {
+  const request = 'что имелось в виду?';
+  const quote = 'x'.repeat(80);
+  // Barely enough for quote+request (budget ≥ 40), little room for preceding.
+  const maxChars = `Цитата (Аня):\n${quote}\n\nЗапрос:\n${request}`.length + 10;
+  const prompt = buildMentionPrompt(
+    request,
+    { author: 'Аня', text: quote },
+    maxChars,
+    false,
+    [
+      { author: 'Old', text: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      { author: 'Mid', text: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+    ],
+  );
+  assert.doesNotMatch(prompt, /Контекст/);
+  assert.match(prompt, /Цитата \(Аня\):/);
+  assert.match(prompt, new RegExp(`Запрос:\\n${request}`));
+  assert.ok(prompt.length <= maxChars);
+});
+
+test('omits preceding when quote+request budget is under 40', () => {
+  const request = 'ок?';
+  const quote = 'коротко';
+  // Force compact path: header+footer leave < 40 for the quote body.
+  const header = 'Цитата (Аня):\n';
+  const footer = `\n\nЗапрос:\n${request}`;
+  const maxChars = header.length + footer.length + 10;
+  const prompt = buildMentionPrompt(
+    request,
+    { author: 'Аня', text: quote },
+    maxChars,
+    false,
+    [{ author: 'Боря', text: 'контекст который не должен попасть' }],
+  );
+  assert.doesNotMatch(prompt, /Контекст/);
+  assert.doesNotMatch(prompt, /контекст который не должен попасть/);
+  assert.match(prompt, /Запрос: ок\?/);
 });
 
 test('quote-only mention gets a default request', () => {
@@ -116,4 +254,14 @@ test('meme system prompt forces friendly meme image instructions', () => {
   assert.match(meme, /доброжелательно/);
   const plain = buildMentionSystemPrompt(0, true, 2, false, false);
   assert.doesNotMatch(plain, /Пользователь просит мем/);
+});
+
+test('mention system prompt explains preceding context blocks', () => {
+  const plain = buildMentionSystemPrompt(0, true, 2, false, false);
+  assert.match(plain, /Контекст \(сообщения до цитаты\)/);
+  assert.match(plain, /Контекст \(недавние сообщения\)/);
+  assert.match(plain, /Запрос/);
+  assert.match(plain, /Цитата/);
+  const meme = buildMentionSystemPrompt(0, true, 2, false, true);
+  assert.match(meme, /Контекст \(недавние сообщения\)/);
 });

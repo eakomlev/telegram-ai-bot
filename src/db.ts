@@ -833,11 +833,13 @@ export async function saveMessage(chatId: number, message: ChatMessage) {
   ]);
 }
 
-/** Preceding lines for auto-answer OpenAI context (newest-first SQL, returned chronological). */
-export async function selectPrecedingMessagesForAutoAnswer(params: {
+/** Preceding lines for OpenAI context (newest-first SQL, returned chronological). */
+export async function selectPrecedingMessages(params: {
   chatId: number;
-  questionMessageId: number;
-  questionCreatedAt: Date;
+  /** Anchor message id — load rows with message_id strictly less than this. */
+  beforeMessageId: number;
+  /** Lookback window is measured from this instant. */
+  beforeSentAt: Date;
   messageThreadId: number | null;
   lookbackMinutes: number;
   maxMessages: number;
@@ -854,13 +856,32 @@ export async function selectPrecedingMessagesForAutoAnswer(params: {
     LIMIT $6`,
   [
     String(params.chatId),
-    params.questionMessageId,
-    params.questionCreatedAt,
+    params.beforeMessageId,
+    params.beforeSentAt,
     params.lookbackMinutes,
     params.messageThreadId,
     params.maxMessages,
   ]);
   return result.rows.reverse();
+}
+
+/** @deprecated Prefer selectPrecedingMessages — kept for existing call sites/tests. */
+export async function selectPrecedingMessagesForAutoAnswer(params: {
+  chatId: number;
+  questionMessageId: number;
+  questionCreatedAt: Date;
+  messageThreadId: number | null;
+  lookbackMinutes: number;
+  maxMessages: number;
+}): Promise<ChatMessage[]> {
+  return selectPrecedingMessages({
+    chatId: params.chatId,
+    beforeMessageId: params.questionMessageId,
+    beforeSentAt: params.questionCreatedAt,
+    messageThreadId: params.messageThreadId,
+    lookbackMinutes: params.lookbackMinutes,
+    maxMessages: params.maxMessages,
+  });
 }
 
 export async function selectMessages(chatId: number, selection: Selection, beforeId: number, connection: pg.PoolClient) {

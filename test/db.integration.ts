@@ -5,7 +5,7 @@ import {
   initializeDatabase,
   saveMessage,
   selectMessages,
-  selectPrecedingMessagesForAutoAnswer,
+  selectPrecedingMessages,
   claimSummary,
   deleteMessage,
   cleanup,
@@ -52,10 +52,10 @@ try {
     await connection.query('SELECT pg_advisory_unlock($1::bigint)', [String(chatA)]);
     await deleteMessage(chatA, 2);
     assert.equal((await selectMessages(chatA, { kind: 'hours', hours: 24 }, 3, connection)).length, 0);
-    const preceding = await selectPrecedingMessagesForAutoAnswer({
+    const preceding = await selectPrecedingMessages({
       chatId: chatA,
-      questionMessageId: 13,
-      questionCreatedAt: new Date(),
+      beforeMessageId: 13,
+      beforeSentAt: new Date(),
       messageThreadId: 7,
       lookbackMinutes: 15,
       maxMessages: 12,

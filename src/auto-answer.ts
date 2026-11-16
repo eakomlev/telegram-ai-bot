@@ -1,5 +1,10 @@
 import type { Context } from 'grammy';
 import type { Message, MessageEntity } from 'grammy/types';
+import {
+  formatContextLine,
+  trimPrecedingContext,
+  type ChatContextMessage,
+} from './chat-context.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { config } from './config.js';
 import {
@@ -7,57 +12,14 @@ import {
   enqueuePendingAutoAnswer,
 } from './db.js';
 import { parseGalleryLink } from './gallery-utils.js';
-import { messageMentionsBot } from './mention.js';
+import { messageAddressesBot } from './mention.js';
 import { parseVideoLink } from './video-utils.js';
 
-/** One preceding chat line used as auto-answer OpenAI context. */
-export type AutoAnswerContextMessage = {
-  author: string;
-  text: string;
-};
+/** @deprecated Prefer ChatContextMessage — kept for existing imports/tests. */
+export type AutoAnswerContextMessage = ChatContextMessage;
 
-function formatContextLine(message: AutoAnswerContextMessage) {
-  const author = (message.author || 'Участник').replace(/\s+/g, ' ').trim() || 'Участник';
-  const text = message.text.replace(/\s*\n\s*/g, ' ').trim();
-  return `[${author}]: ${text}`;
-}
-
-/**
- * Keep newest messages within a char budget: drop oldest whole lines first;
- * if the newest alone still exceeds, truncate it with ….
- */
-export function trimAutoAnswerContext(
-  messages: AutoAnswerContextMessage[],
-  maxChars: number,
-): AutoAnswerContextMessage[] {
-  if (maxChars <= 0 || messages.length === 0) return [];
-
-  const selected = [...messages];
-  const totalChars = () => {
-    let used = 0;
-    for (let i = 0; i < selected.length; i++) {
-      used += formatContextLine(selected[i]!).length;
-      if (i > 0) used += 1; // newline between lines
-    }
-    return used;
-  };
-
-  while (selected.length > 1 && totalChars() > maxChars) {
-    selected.shift();
-  }
-
-  if (selected.length === 0) return [];
-  if (totalChars() <= maxChars) return selected;
-
-  // Single oversized newest line: shrink text until the formatted line fits.
-  const newest = selected[0]!;
-  const author = (newest.author || 'Участник').replace(/\s+/g, ' ').trim() || 'Участник';
-  const prefix = `[${author}]: `;
-  const ellipsis = '…';
-  const budget = Math.max(0, maxChars - prefix.length - ellipsis.length);
-  const compact = newest.text.replace(/\s*\n\s*/g, ' ').trim();
-  return [{ author, text: `${compact.slice(0, budget)}${ellipsis}` }];
-}
+/** @deprecated Prefer trimPrecedingContext — kept for existing imports/tests. */
+export const trimAutoAnswerContext = trimPrecedingContext;
 
 /** Pure user prompt for unanswered-question auto-replies (unit-tested). */
 export function formatAutoAnswerUserPrompt(
@@ -163,7 +125,7 @@ export function shouldEnqueueAutoAnswer(message: Message): boolean {
   if (!text) return false;
   if (/^\/[\w]+(?:@\w+)?(?:\s|$)/.test(text)) return false;
   if (message.reply_to_message) return false;
-  if (messageMentionsBot(message)) return false;
+  if (messageAddressesBot(message)) return false;
   if (messageHasAnyMention(message)) return false;
   if (isUrlOnlyMediaCandidate(text, entitiesOf(message))) return false;
   return isGeneralQuestion(text);

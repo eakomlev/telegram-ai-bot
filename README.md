@@ -112,6 +112,7 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | `AUTO_ANSWER_ENABLED` | `true` | Глобальный переключатель автоответа; в группе всё равно нужно включить в `/settings` (по умолчанию выкл) |
 | `AUTO_ANSWER_DELAY_SECONDS` / `AUTO_ANSWER_TICK_INTERVAL_MS` | `300` / `15000` | Сколько ждать ответа людей и как часто опрашивать очередь |
 | `AUTO_ANSWER_CONTEXT_MAX_MESSAGES` / `AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES` / `AUTO_ANSWER_CONTEXT_MAX_CHARS` | `12` / `15` / `2500` | Окно предшествующих сообщений как контекст OpenAI при автоответе (`0` сообщений — только вопрос); пересечение лимитов по числу, времени и символам |
+| `MENTION_CONTEXT_MAX_MESSAGES` / `MENTION_CONTEXT_LOOKBACK_MINUTES` / `MENTION_CONTEXT_MAX_CHARS` | `6` / `10` / `500` | Окно сообщений до @упоминания (или до цитаты, если есть reply); `0` — без контекста; ужимается раньше цитаты и запроса в общем лимите `MENTION_MAX_INPUT_CHARS` |
 | `ALLOWED_CHAT_IDS` | пусто | Разрешённые группы через запятую, например `-1001234567890,-1009876543210`; пусто — все группы |
 | `OWNER_USER_ID` | пусто | Ваш Telegram user id; в личке `/stats` — сводка расходов OpenAI по всем группам только для вас |
 | `SUMMARY_ADMIN_ONLY` | `true` | Только администраторы могут тратить API-баланс |
