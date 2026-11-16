@@ -191,3 +191,12 @@ test('meme system prompt forces friendly meme image instructions', () => {
   const plain = buildMentionSystemPrompt(0, true, 2, false, false);
   assert.doesNotMatch(plain, /Пользователь просит мем/);
 });
+
+test('mention system prompt explains preceding quote context block', () => {
+  const plain = buildMentionSystemPrompt(0, true, 2, false, false);
+  assert.match(plain, /Контекст \(сообщения до цитаты\)/);
+  assert.match(plain, /Запрос/);
+  assert.match(plain, /Цитата/);
+  const meme = buildMentionSystemPrompt(0, true, 2, false, true);
+  assert.match(meme, /Контекст \(сообщения до цитаты\)/);
+});

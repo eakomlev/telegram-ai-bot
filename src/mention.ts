@@ -215,9 +215,32 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     ...collectMessageImageFileIds(ctx.message.reply_to_message),
   ];
 
+  // Cheap empty check before cooldown/DB: preceding is only useful with a quote.
+  const draftPrompt = buildMentionPrompt(
+    userText,
+    quoted,
+    config.MENTION_MAX_INPUT_CHARS,
+    fileIds.length > 0,
+  );
+  if (!draftPrompt && !fileIds.length) {
+    await ctx.reply('Напишите вопрос после упоминания бота, приложите картинку или ответьте цитатой на сообщение.', {
+      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+      ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
+    }).catch(() => {});
+    return true;
+  }
+
+  if (!claimMentionSlot(ctx.chat.id)) {
+    await ctx.reply(`Подождите ${config.MENTION_COOLDOWN_SECONDS} сек. между обращениями ко мне.`, {
+      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+      ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
+    }).catch(() => {});
+    return true;
+  }
+
   let preceding: ChatContextMessage[] = [];
   const replyTo = ctx.message.reply_to_message;
-  if (replyTo && config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
+  if (quoted && replyTo && config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
     try {
       const rows = await selectPrecedingMessages({
         chatId: ctx.chat.id,
@@ -247,21 +270,6 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     fileIds.length > 0,
     preceding,
   );
-  if (!prompt && !fileIds.length) {
-    await ctx.reply('Напишите вопрос после упоминания бота, приложите картинку или ответьте цитатой на сообщение.', {
-      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-      ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
-    }).catch(() => {});
-    return true;
-  }
-
-  if (!claimMentionSlot(ctx.chat.id)) {
-    await ctx.reply(`Подождите ${config.MENTION_COOLDOWN_SECONDS} сек. между обращениями ко мне.`, {
-      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-      ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
-    }).catch(() => {});
-    return true;
-  }
 
   const reply = {
     reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
