@@ -102,9 +102,45 @@ export function isMemeRequest(text: string): boolean {
   return false;
 }
 
+/** Attach preceding chat lines in front of the main body; drop/truncate oldest first. */
+function withPrecedingContext(
+  body: string,
+  preceding: ChatContextMessage[],
+  maxChars: number,
+  contextHeader: string,
+): string {
+  if (body.length > maxChars) return `${body.slice(0, maxChars)}…`;
+  const contextLines = preceding
+    .map(formatContextLine)
+    .filter((line) => !/^\[.+\]:\s*$/.test(line));
+  if (!contextLines.length) return body;
+
+  const separator = '\n\n';
+  const contextBudget = maxChars - contextHeader.length - separator.length - body.length;
+  if (contextBudget < 1) return body;
+
+  const selected = [...contextLines];
+  const joinedLen = () => selected.join('\n').length;
+  while (selected.length > 1 && joinedLen() > contextBudget) {
+    selected.shift();
+  }
+  if (selected.length === 0) return body;
+
+  let contextBody = selected.join('\n');
+  if (contextBody.length > contextBudget) {
+    const ellipsis = '…';
+    const keep = Math.max(0, contextBudget - ellipsis.length);
+    contextBody = `${contextBody.slice(0, keep)}${ellipsis}`;
+  }
+  if (!contextBody.trim()) return body;
+
+  const result = `${contextHeader}${contextBody}${separator}${body}`;
+  return result.length > maxChars ? `${result.slice(0, maxChars)}…` : result;
+}
+
 /**
  * Prefer keeping the user request, then the quote; drop/truncate preceding first.
- * Empty preceding keeps the previous quote+request format unchanged.
+ * Empty preceding keeps the previous format unchanged.
  */
 export function buildMentionPrompt(
   userText: string,
@@ -116,7 +152,21 @@ export function buildMentionPrompt(
   const request = userText.trim()
     || (quoted || hasImages ? 'Опиши и прокомментируй по делу с учётом контекста и изображений.' : '');
   if (!request) return '';
-  if (!quoted) return request.length > maxChars ? `${request.slice(0, maxChars)}…` : request;
+
+  if (!quoted) {
+    const body = preceding.length ? `Запрос:\n${request}` : request;
+    const capped = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
+    // Barely room for a labeled request — skip preceding.
+    if (preceding.length && maxChars - capped.length < 20) {
+      return request.length > maxChars ? `${request.slice(0, maxChars)}…` : request;
+    }
+    return withPrecedingContext(
+      capped,
+      preceding,
+      maxChars,
+      'Контекст (недавние сообщения):\n',
+    );
+  }
 
   const header = `Цитата (${quoted.author}):\n`;
   const footer = `\n\nЗапрос:\n${request}`;
@@ -128,35 +178,12 @@ export function buildMentionPrompt(
   }
   const quote = quoted.text.length > budget ? `${quoted.text.slice(0, budget)}…` : quoted.text;
   const quoteAndRequest = `${header}${quote}${footer}`;
-
-  const contextLines = preceding
-    .map(formatContextLine)
-    .filter((line) => !/^\[.+\]:\s*$/.test(line));
-  if (!contextLines.length) return quoteAndRequest;
-
-  const contextHeader = 'Контекст (сообщения до цитаты):\n';
-  const separator = '\n\n';
-  const contextBudget = maxChars - contextHeader.length - separator.length - quoteAndRequest.length;
-  if (contextBudget < 1) return quoteAndRequest;
-
-  // Drop oldest whole lines first; truncate the newest remaining line if still over.
-  const selected = [...contextLines];
-  const joinedLen = () => selected.join('\n').length;
-  while (selected.length > 1 && joinedLen() > contextBudget) {
-    selected.shift();
-  }
-  if (selected.length === 0) return quoteAndRequest;
-
-  let contextBody = selected.join('\n');
-  if (contextBody.length > contextBudget) {
-    const ellipsis = '…';
-    const keep = Math.max(0, contextBudget - ellipsis.length);
-    contextBody = `${contextBody.slice(0, keep)}${ellipsis}`;
-  }
-  if (!contextBody.trim()) return quoteAndRequest;
-
-  const result = `${contextHeader}${contextBody}${separator}${quoteAndRequest}`;
-  return result.length > maxChars ? `${result.slice(0, maxChars)}…` : result;
+  return withPrecedingContext(
+    quoteAndRequest,
+    preceding,
+    maxChars,
+    'Контекст (сообщения до цитаты):\n',
+  );
 }
 
 function claimMentionSlot(chatId: number) {
@@ -215,7 +242,7 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     ...collectMessageImageFileIds(ctx.message.reply_to_message),
   ];
 
-  // Cheap empty check before cooldown/DB: preceding is only useful with a quote.
+  // Cheap empty check before cooldown/DB (without preceding).
   const draftPrompt = buildMentionPrompt(
     userText,
     quoted,
@@ -239,14 +266,16 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
   }
 
   let preceding: ChatContextMessage[] = [];
-  const replyTo = ctx.message.reply_to_message;
-  if (quoted && replyTo && config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
+  if (config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
+    // With a quote, anchor before the quoted message; otherwise before the mention itself.
+    const replyTo = quoted ? ctx.message.reply_to_message : undefined;
+    const anchor = replyTo ?? ctx.message;
     try {
       const rows = await selectPrecedingMessages({
         chatId: ctx.chat.id,
-        beforeMessageId: replyTo.message_id,
-        beforeSentAt: new Date(replyTo.date * 1000),
-        messageThreadId: replyTo.message_thread_id ?? ctx.message.message_thread_id ?? null,
+        beforeMessageId: anchor.message_id,
+        beforeSentAt: new Date(anchor.date * 1000),
+        messageThreadId: anchor.message_thread_id ?? ctx.message.message_thread_id ?? null,
         lookbackMinutes: config.MENTION_CONTEXT_LOOKBACK_MINUTES,
         maxMessages: config.MENTION_CONTEXT_MAX_MESSAGES,
       });
@@ -255,9 +284,9 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
         config.MENTION_CONTEXT_MAX_CHARS,
       );
     } catch (error) {
-      console.error('Mention quote context load failed', {
+      console.error('Mention context load failed', {
         chatId: ctx.chat.id,
-        messageId: replyTo.message_id,
+        messageId: anchor.message_id,
         message: error instanceof Error ? error.message : String(error),
       });
     }

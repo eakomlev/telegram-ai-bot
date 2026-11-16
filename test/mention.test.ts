@@ -85,6 +85,35 @@ test('includes preceding messages before the quote', () => {
   );
 });
 
+test('includes preceding messages for a plain mention without quote', () => {
+  const prompt = buildMentionPrompt(
+    'что решили?',
+    undefined,
+    1500,
+    false,
+    [
+      { author: 'Боря', text: 'Может в пятницу?' },
+      { author: 'Аня', text: 'Да, давайте' },
+    ],
+  );
+  assert.equal(
+    prompt,
+    [
+      'Контекст (недавние сообщения):',
+      '[Боря]: Может в пятницу?',
+      '[Аня]: Да, давайте',
+      '',
+      'Запрос:',
+      'что решили?',
+    ].join('\n'),
+  );
+});
+
+test('plain mention without preceding stays a bare request', () => {
+  assert.equal(buildMentionPrompt('привет', undefined, 1500), 'привет');
+  assert.equal(buildMentionPrompt('привет', undefined, 1500, false, []), 'привет');
+});
+
 test('drops preceding before truncating quote or request when budget is tight', () => {
   const request = 'что имелось в виду?';
   const quote = 'x'.repeat(80);
@@ -192,11 +221,12 @@ test('meme system prompt forces friendly meme image instructions', () => {
   assert.doesNotMatch(plain, /Пользователь просит мем/);
 });
 
-test('mention system prompt explains preceding quote context block', () => {
+test('mention system prompt explains preceding context blocks', () => {
   const plain = buildMentionSystemPrompt(0, true, 2, false, false);
   assert.match(plain, /Контекст \(сообщения до цитаты\)/);
+  assert.match(plain, /Контекст \(недавние сообщения\)/);
   assert.match(plain, /Запрос/);
   assert.match(plain, /Цитата/);
   const meme = buildMentionSystemPrompt(0, true, 2, false, true);
-  assert.match(meme, /Контекст \(сообщения до цитаты\)/);
+  assert.match(meme, /Контекст \(недавние сообщения\)/);
 });
