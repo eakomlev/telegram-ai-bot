@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { z } from 'zod';
-import { parseTelegramApiRoot, parseTelegramProxyUrl } from './telegram-proxy.js';
 
 const integer = (fallback: number, min: number, max: number) =>
   z.coerce.number().int().min(min).max(max).default(fallback);
@@ -8,28 +7,6 @@ const bool = z.enum(['true', 'false']);
 
 const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_PROXY_URL: z.string().default('').refine(
-    (value) => {
-      try {
-        parseTelegramProxyUrl(value);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    'Expected empty or an http, https, socks5, or socks5h proxy URL with host and port',
-  ),
-  TELEGRAM_API_ROOT: z.string().default('').refine(
-    (value) => {
-      try {
-        parseTelegramApiRoot(value);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    'Expected empty or an absolute http(s) Telegram API root URL with host (no path, query, hash, or credentials)',
-  ),
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default('gpt-4.1-mini'),
   OPENAI_BASE_URL: z.string().default(''),
@@ -79,11 +56,8 @@ const schema = z.object({
   GALLERY_OUTPUT_MAX_MB: integer(10, 1, 20),
   GALLERY_METADATA_MAX_MB: integer(4, 1, 32),
   GALLERY_WHITELIST: z.string().min(1).default('instagram,twitter,reddit,pixiv,imgur'),
-  INSTAGRAM_BROWSER_ENABLED: bool.default('true'),
-  /** Hard cap for the whole Instagram fetch (gallery-dl + Playwright). */
+  /** Hang-prevention timeout for Instagram gallery-dl downloads. */
   INSTAGRAM_DOWNLOAD_TIMEOUT_MS: integer(120000, 10000, 300000),
-  /** Per page.goto / navigation timeout inside the Instagram browser fallback. */
-  INSTAGRAM_BROWSER_TIMEOUT_MS: integer(40000, 5000, 120000),
   MARKETPLACE_ENABLED: bool.default('true'),
   MARKETPLACE_MAX_IMAGES: integer(5, 1, 10),
   MEDIA_MAX_CONCURRENT: z.coerce.number().int().min(1).max(3).optional(),

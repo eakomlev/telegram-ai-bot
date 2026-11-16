@@ -14,12 +14,6 @@
    ```
 
    В `.env` заполните `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, задайте собственный `POSTGRES_PASSWORD`. Не публикуйте `.env` и ключи.
-
-   Необязательный `TELEGRAM_API_ROOT` задаёт альтернативный корень Bot API (локальный Bot API / зеркало), например `http://127.0.0.1:8081`. Только абсолютный `http`/`https` с хостом (порт опционален); без пути, query, hash и учётных данных. Пустое значение — `https://api.telegram.org`.
-
-   Необязательный `TELEGRAM_PROXY_URL` задаёт CONNECT/SOCKS-прокси только для Telegram Bot API (`http`, `https`, `socks5` или `socks5h` с хостом и портом). Пустое значение — прямое соединение. `socks5` резолвит `api.telegram.org` локально, `socks5h` — на стороне прокси. Логин и пароль остаются в `.env` и не выводятся в журнал. Внутри Docker `127.0.0.1` — это контейнер, а не хост.
-
-   Предпочтительно задавать либо `TELEGRAM_API_ROOT`, либо `TELEGRAM_PROXY_URL`, а не оба сразу.
 5. Запустите:
 
    ```bash
@@ -95,7 +89,7 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | `MEDIA_MAX_CONCURRENT` | `1` | Общий лимит параллельных заданий видео и картинок |
 | `MEDIA_COOLDOWN_SECONDS` | `30` | Общий интервал между загрузками одной группы |
 
-Если `MEDIA_*` не заданы, используются прежние `VIDEO_MAX_CONCURRENT` и `VIDEO_COOLDOWN_SECONDS` для совместимости. Внутри поста видео пропускаются, поэтому картинок может оказаться меньше заданного лимита. Превышение суммарного объёма прерывает обработку. Приватные посты и платформы, требующие входа, по-прежнему часто недоступны. Для Instagram `/p/...` при сбое gallery-dl бот пробует headless Chromium (Playwright, `INSTAGRAM_BROWSER_ENABLED`). Это повышает шансы на публичные посты, но login-wall и challenge Instagram могут всё равно помешать. Cookies/аккаунт не передаются.
+Если `MEDIA_*` не заданы, используются прежние `VIDEO_MAX_CONCURRENT` и `VIDEO_COOLDOWN_SECONDS` для совместимости. Внутри поста видео пропускаются, поэтому картинок может оказаться меньше заданного лимита. Превышение суммарного объёма прерывает обработку. Приватные посты и платформы, требующие входа, по-прежнему часто недоступны.
 
 Для локального запуска дополнительно установите `gallery-dl` в `PATH`. В Docker он устанавливается автоматически. Обновление: `docker compose build --no-cache bot && docker compose up -d`. Чтобы закрепить версию: `docker compose build --build-arg GALLERY_DL_VERSION=ВЕРСИЯ bot`.
 

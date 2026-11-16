@@ -16,7 +16,6 @@ ARG YT_DLP_VERSION=""
 ARG GALLERY_DL_VERSION=""
 ENV PATH="/opt/yt-dlp/bin:$PATH"
 ENV NODE_ENV=production
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 RUN --mount=type=secret,id=npm_ca \
     if [ -f /run/secrets/npm_ca ]; then \
@@ -32,9 +31,5 @@ RUN --mount=type=secret,id=npm_ca \
       "gallery-dl${GALLERY_DL_VERSION:+==${GALLERY_DL_VERSION}}" \
     && rm -rf /var/lib/apt/lists/* /tmp/build-ca.pem
 COPY --from=build --chown=node:node /runtime ./
-USER root
-RUN npx playwright install --with-deps chromium \
-    && mkdir -p /ms-playwright \
-    && chown -R node:node /ms-playwright /app
 USER node
 CMD ["node", "dist/index.js"]

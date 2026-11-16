@@ -7,7 +7,6 @@ import { enqueueMedia, mediaSignal, mediaClosing } from './media-jobs.js';
 import { runProcess } from './process.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { galleryCaption, parseGalleryLink } from './gallery-utils.js';
-import { downloadInstagramWithBrowser } from './instagram-browser.js';
 import { downloadMarketplaceProduct, isMarketplacePlatform } from './marketplace.js';
 import { startStatus } from './status.js';
 
@@ -63,42 +62,18 @@ export async function repostGallery(ctx: Context, source: Source, execute = runP
       entries = await readdir(root);
       inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
     } else {
-      // Instagram gallery-dl often hangs; keep a short budget so Playwright can still run.
-      const galleryDlBudgetMs = isInstagram
-        ? Math.min(40_000, Math.max(1, fetchDeadline - Date.now()))
-        : Math.max(1, fetchDeadline - Date.now());
-      try {
-        await execute('gallery-dl', ['--config-ignore', '--no-input', '--no-colors', '--no-mtime',
-          '--cache-file', ':memory:',
-          '--http-timeout', String(config.DOWNLOADER_HTTP_TIMEOUT_SECONDS),
-          '--retries', String(config.DOWNLOADER_RETRIES),
-          '--directory', root, '--restrict-filenames', 'windows',
-          '--range', `1-${config.GALLERY_MAX_IMAGES}`, '--post-range', '1', '--child-range', '1',
-          '--whitelist', config.GALLERY_WHITELIST,
-          '--filter', "extension in ('jpg', 'jpeg', 'png', 'webp', 'avif')",
-          '--filesize-max', `${config.GALLERY_MAX_IMAGE_MB}M`, '--write-metadata', '--', source.url],
-        galleryDlBudgetMs, fetchSignal);
-      } catch (error) {
-        if (!isInstagram || config.INSTAGRAM_BROWSER_ENABLED !== 'true') throw error;
-        console.error('gallery-dl failed for Instagram, trying Playwright');
-      }
+      await execute('gallery-dl', ['--config-ignore', '--no-input', '--no-colors', '--no-mtime',
+        '--cache-file', ':memory:',
+        '--http-timeout', String(config.DOWNLOADER_HTTP_TIMEOUT_SECONDS),
+        '--retries', String(config.DOWNLOADER_RETRIES),
+        '--directory', root, '--restrict-filenames', 'windows',
+        '--range', `1-${config.GALLERY_MAX_IMAGES}`, '--post-range', '1', '--child-range', '1',
+        '--whitelist', config.GALLERY_WHITELIST,
+        '--filter', "extension in ('jpg', 'jpeg', 'png', 'webp', 'avif')",
+        '--filesize-max', `${config.GALLERY_MAX_IMAGE_MB}M`, '--write-metadata', '--', source.url],
+      Math.max(1, fetchDeadline - Date.now()), fetchSignal);
       entries = await readdir(root);
       inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-      if (
-        !inputs.length
-        && isInstagram
-        && config.INSTAGRAM_BROWSER_ENABLED === 'true'
-      ) {
-        if (fetchSignal.aborted || Date.now() >= fetchDeadline) throw new Error('instagram timeout');
-        const browserResult = await downloadInstagramWithBrowser(source.url, root, {
-          maxImages: config.GALLERY_MAX_IMAGES,
-          maxBytesPerImage: config.GALLERY_MAX_IMAGE_MB * 1024 * 1024,
-          signal: fetchSignal,
-        });
-        info = browserResult.info;
-        entries = await readdir(root);
-        inputs = entries.filter((file) => /\.(jpe?g|png|webp|avif)$/i.test(file)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-      }
     }
     clearInterval(monitor);
     if (!inputs.length) throw new Error('no images');
