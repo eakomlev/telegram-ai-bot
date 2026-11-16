@@ -95,6 +95,10 @@ const schema = z.object({
   AUTO_ANSWER_MAX_OUTPUT_TOKENS: integer(600, 64, 4000),
   AUTO_ANSWER_MAX_INPUT_CHARS: integer(1500, 100, 8000),
   AUTO_ANSWER_CLAIM_LEASE_MS: integer(180000, 10000, 600000),
+  /** Preceding chat lines loaded at fire time for OpenAI context; 0 = question only. */
+  AUTO_ANSWER_CONTEXT_MAX_MESSAGES: integer(12, 0, 100),
+  AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES: integer(15, 1, 1440),
+  AUTO_ANSWER_CONTEXT_MAX_CHARS: integer(2500, 0, 50000),
   OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-1-mini'),
   OPENAI_INPUT_USD_PER_1M_TOKENS: z.coerce.number().min(0).max(1000).default(0.4),
   OPENAI_OUTPUT_USD_PER_1M_TOKENS: z.coerce.number().min(0).max(1000).default(1.6),

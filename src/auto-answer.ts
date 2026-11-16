@@ -10,6 +10,79 @@ import { parseGalleryLink } from './gallery-utils.js';
 import { messageMentionsBot } from './mention.js';
 import { parseVideoLink } from './video-utils.js';
 
+/** One preceding chat line used as auto-answer OpenAI context. */
+export type AutoAnswerContextMessage = {
+  author: string;
+  text: string;
+};
+
+function formatContextLine(message: AutoAnswerContextMessage) {
+  const author = (message.author || 'Участник').replace(/\s+/g, ' ').trim() || 'Участник';
+  const text = message.text.replace(/\s*\n\s*/g, ' ').trim();
+  return `[${author}]: ${text}`;
+}
+
+/**
+ * Keep newest messages within a char budget: drop oldest whole lines first;
+ * if the newest alone still exceeds, truncate it with ….
+ */
+export function trimAutoAnswerContext(
+  messages: AutoAnswerContextMessage[],
+  maxChars: number,
+): AutoAnswerContextMessage[] {
+  if (maxChars <= 0 || messages.length === 0) return [];
+
+  const selected = [...messages];
+  const totalChars = () => {
+    let used = 0;
+    for (let i = 0; i < selected.length; i++) {
+      used += formatContextLine(selected[i]!).length;
+      if (i > 0) used += 1; // newline between lines
+    }
+    return used;
+  };
+
+  while (selected.length > 1 && totalChars() > maxChars) {
+    selected.shift();
+  }
+
+  if (selected.length === 0) return [];
+  if (totalChars() <= maxChars) return selected;
+
+  // Single oversized newest line: shrink text until the formatted line fits.
+  const newest = selected[0]!;
+  const author = (newest.author || 'Участник').replace(/\s+/g, ' ').trim() || 'Участник';
+  const prefix = `[${author}]: `;
+  const ellipsis = '…';
+  const budget = Math.max(0, maxChars - prefix.length - ellipsis.length);
+  const compact = newest.text.replace(/\s*\n\s*/g, ' ').trim();
+  return [{ author, text: `${compact.slice(0, budget)}${ellipsis}` }];
+}
+
+/** Pure user prompt for unanswered-question auto-replies (unit-tested). */
+export function formatAutoAnswerUserPrompt(
+  questionText: string,
+  author: string,
+  contextMessages: AutoAnswerContextMessage[] = [],
+): string {
+  const question = questionText.trim();
+  const who = (author || 'Участник').trim() || 'Участник';
+  const contextLines = contextMessages
+    .map(formatContextLine)
+    .filter((line) => !/^\[.+\]:\s*$/.test(line));
+
+  const parts: string[] = [];
+  if (contextLines.length) {
+    parts.push('Контекст (недавние сообщения до вопроса):');
+    parts.push(contextLines.join('\n'));
+    parts.push('');
+  }
+  parts.push(`Автор вопроса: ${who}`);
+  parts.push('Вопрос:');
+  parts.push(question);
+  return parts.join('\n');
+}
+
 /** Strong ask-the-group verbs / pronouns — mid-sentence is fine. */
 const STRONG_INTERROGATIVE_RE =
   /(?:^|[^\p{L}\p{N}])(?:кто|кого|кому|кем|где|куда|откуда|когда|почему|зачем|сколько|подскажите|подскажи|подскажете|посоветуйте|посоветуй|помогите|помоги|не\s+подскажете|есть\s+ли|who|what|where|when|why|how|which|anyone|does\s+anyone|is\s+there)(?=[^\p{L}\p{N}]|$)/iu;
