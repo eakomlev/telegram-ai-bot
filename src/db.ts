@@ -380,6 +380,16 @@ export async function markNewsSent(chatId: number, moscowDate: string, nextRunAt
   );
 }
 
+/** Failsafe after a delivered post: block same-day reclaim even if next_run update failed. */
+export async function markNewsSentDay(chatId: number, moscowDate: string) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET news_last_sent_on = $2::date, updated_at = now()
+     WHERE chat_id = $1`,
+    [String(chatId), moscowDate],
+  );
+}
+
 export async function rescheduleNewsRun(chatId: number, nextRunAt: Date | null) {
   await pool.query(
     `UPDATE chat_settings

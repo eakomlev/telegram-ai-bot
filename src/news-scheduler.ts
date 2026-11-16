@@ -8,6 +8,7 @@ import {
   getChatSettingsRow,
   listDueNewsChats,
   markNewsSent,
+  markNewsSentDay,
   rescheduleNewsRun,
 } from './db.js';
 import { moscowDateString, moscowParts, pickRandomNewsRunAt, zonedMoscowTime } from './moscow-time.js';
@@ -97,7 +98,6 @@ export async function runNewsSchedulerTick(api: Api, now = new Date()) {
     if (!claimed) continue;
     try {
       await postNewsToChat(api, chat.chatId, claimed.newsSpheres);
-      await markNewsSent(chat.chatId, moscowDate, nextDayNewsRunAt(now));
     } catch (error) {
       console.error('Daily news send failed', {
         chatId: chat.chatId,
@@ -119,8 +119,45 @@ export async function runNewsSchedulerTick(api: Api, now = new Date()) {
       } catch {
         // next_run stays on the short claim lease and becomes due again after it expires
       }
+      continue;
+    }
+
+    // Send already succeeded — never soft-retry another generation/post if only mark fails.
+    try {
+      await markNewsSentWithRetry(chat.chatId, moscowDate, nextDayNewsRunAt(now));
+    } catch (error) {
+      console.error('Daily news mark-sent failed after delivery', {
+        chatId: chat.chatId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        await markNewsSentDay(chat.chatId, moscowDate);
+      } catch (dayError) {
+        console.error('Daily news day-mark failsafe failed', {
+          chatId: chat.chatId,
+          message: dayError instanceof Error ? dayError.message : String(dayError),
+        });
+      }
     }
   }
+}
+
+async function markNewsSentWithRetry(chatId: number, moscowDate: string, nextRunAt: Date) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= RESCHEDULE_ATTEMPTS; attempt += 1) {
+    try {
+      await markNewsSent(chatId, moscowDate, nextRunAt);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.error('Daily news mark-sent failed', {
+        chatId,
+        attempt,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 export function startNewsScheduler(api: Api) {
