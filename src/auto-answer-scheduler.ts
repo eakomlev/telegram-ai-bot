@@ -1,5 +1,9 @@
 import type { Api } from 'grammy';
 import { replyToUnansweredQuestion } from './ai.js';
+import {
+  trimAutoAnswerContext,
+  type AutoAnswerContextMessage,
+} from './auto-answer.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { allowedChatIds, config } from './config.js';
 import {
@@ -14,6 +18,7 @@ import {
   reclaimSendingAutoAnswerForSendRetry,
   listDuePendingAutoAnswers,
   recordOpenAiUsage,
+  selectPrecedingMessagesForAutoAnswer,
   type PendingAutoAnswer,
 } from './db.js';
 import { isPermanentTelegramDeliveryError } from './news-scheduler.js';
@@ -51,13 +56,46 @@ function claimLeaseOrThrow(row: PendingAutoAnswer): Date {
   return row.claimedUntil;
 }
 
+async function loadAutoAnswerContext(row: PendingAutoAnswer): Promise<AutoAnswerContextMessage[]> {
+  if (config.AUTO_ANSWER_CONTEXT_MAX_MESSAGES <= 0) return [];
+  try {
+    const rows = await selectPrecedingMessagesForAutoAnswer({
+      chatId: row.chatId,
+      questionMessageId: row.messageId,
+      questionCreatedAt: row.createdAt,
+      messageThreadId: row.messageThreadId,
+      lookbackMinutes: config.AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES,
+      maxMessages: config.AUTO_ANSWER_CONTEXT_MAX_MESSAGES,
+    });
+    return trimAutoAnswerContext(
+      rows.map((message) => ({ author: message.author, text: message.text })),
+      config.AUTO_ANSWER_CONTEXT_MAX_CHARS,
+    );
+  } catch (error) {
+    console.error('Auto-answer context load failed', {
+      chatId: row.chatId,
+      messageId: row.messageId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
 async function ensureAnswerText(row: PendingAutoAnswer, lease: Date, sarcasmLevel: number): Promise<string | undefined> {
+  // Send retry: answer_text already set — skip OpenAI and context reload.
   if (!needsOpenAiGeneration(row.answerText)) return row.answerText!.trim();
+
+  const contextMessages = await loadAutoAnswerContext(row);
 
   let text: string;
   let usage: Awaited<ReturnType<typeof replyToUnansweredQuestion>>['usage'];
   try {
-    ({ text, usage } = await replyToUnansweredQuestion(row.questionText, row.author, sarcasmLevel));
+    ({ text, usage } = await replyToUnansweredQuestion(
+      row.questionText,
+      row.author,
+      sarcasmLevel,
+      contextMessages,
+    ));
   } catch (error) {
     console.error('Auto-answer OpenAI failed', {
       chatId: row.chatId,
