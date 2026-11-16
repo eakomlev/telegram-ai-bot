@@ -88,6 +88,13 @@ const schema = z.object({
   NEWS_MAX_OUTPUT_TOKENS: integer(700, 64, 4000),
   NEWS_TICK_INTERVAL_MS: integer(60000, 5000, 3600000),
   NEWS_RETRY_MINUTES: integer(20, 1, 180),
+  /** Global gate for unanswered-question auto-replies; per-chat setting stays opt-in (default off). */
+  AUTO_ANSWER_ENABLED: bool.default('true'),
+  AUTO_ANSWER_DELAY_SECONDS: integer(300, 30, 3600),
+  AUTO_ANSWER_TICK_INTERVAL_MS: integer(15000, 1000, 600000),
+  AUTO_ANSWER_MAX_OUTPUT_TOKENS: integer(600, 64, 4000),
+  AUTO_ANSWER_MAX_INPUT_CHARS: integer(1500, 100, 8000),
+  AUTO_ANSWER_CLAIM_LEASE_MS: integer(180000, 10000, 600000),
   OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-1-mini'),
   OPENAI_INPUT_USD_PER_1M_TOKENS: z.coerce.number().min(0).max(1000).default(0.4),
   OPENAI_OUTPUT_USD_PER_1M_TOKENS: z.coerce.number().min(0).max(1000).default(1.6),
