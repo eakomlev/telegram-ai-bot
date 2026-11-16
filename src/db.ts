@@ -55,8 +55,25 @@ export async function initializeDatabase() {
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_spheres TEXT[] NOT NULL DEFAULT '{}';
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_next_run_at TIMESTAMPTZ NULL;
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_last_sent_on DATE NULL;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS auto_answer_enabled BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS chat_settings_news_due ON chat_settings (news_next_run_at)
       WHERE news_enabled;
+    CREATE TABLE IF NOT EXISTS pending_auto_answers (
+      chat_id BIGINT NOT NULL,
+      message_id INTEGER NOT NULL,
+      message_thread_id INTEGER NULL,
+      author TEXT NOT NULL,
+      question_text TEXT NOT NULL,
+      asker_user_id BIGINT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      due_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      claimed_until TIMESTAMPTZ NULL,
+      PRIMARY KEY (chat_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS pending_auto_answers_due
+      ON pending_auto_answers (due_at)
+      WHERE status = 'pending';
     CREATE TABLE IF NOT EXISTS openai_usage (
       id BIGSERIAL PRIMARY KEY,
       chat_id BIGINT NOT NULL,
@@ -79,7 +96,7 @@ export async function initializeDatabase() {
   `);
 }
 
-export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news';
+export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer';
 
 export type OpenAiUsageRecord = {
   kind: OpenAiUsageKind;
@@ -96,6 +113,7 @@ export type OpenAiUsageTotals = {
   mentionRequests: number;
   gifRequests: number;
   newsRequests: number;
+  autoAnswerRequests: number;
   promptTokens: number;
   completionTokens: number;
   imageCount: number;
@@ -108,6 +126,7 @@ const emptyUsageTotals = (): OpenAiUsageTotals => ({
   mentionRequests: 0,
   gifRequests: 0,
   newsRequests: 0,
+  autoAnswerRequests: 0,
   promptTokens: 0,
   completionTokens: 0,
   imageCount: 0,
@@ -137,6 +156,7 @@ function mapUsageTotals(row: {
   mention_requests: string;
   gif_requests: string;
   news_requests: string;
+  auto_answer_requests: string;
   prompt_tokens: string;
   completion_tokens: string;
   image_count: string;
@@ -149,6 +169,7 @@ function mapUsageTotals(row: {
     mentionRequests: Number(row.mention_requests) || 0,
     gifRequests: Number(row.gif_requests) || 0,
     newsRequests: Number(row.news_requests) || 0,
+    autoAnswerRequests: Number(row.auto_answer_requests) || 0,
     promptTokens: Number(row.prompt_tokens) || 0,
     completionTokens: Number(row.completion_tokens) || 0,
     imageCount: Number(row.image_count) || 0,
@@ -162,6 +183,7 @@ const USAGE_TOTALS_SELECT = `
   COUNT(*) FILTER (WHERE kind = 'mention')::text AS mention_requests,
   COUNT(*) FILTER (WHERE kind = 'gif')::text AS gif_requests,
   COUNT(*) FILTER (WHERE kind = 'news')::text AS news_requests,
+  COUNT(*) FILTER (WHERE kind = 'auto_answer')::text AS auto_answer_requests,
   COALESCE(SUM(prompt_tokens), 0)::text AS prompt_tokens,
   COALESCE(SUM(completion_tokens), 0)::text AS completion_tokens,
   COALESCE(SUM(image_count), 0)::text AS image_count,
@@ -175,6 +197,7 @@ export async function getOpenAiUsageTotals(chatId: number, since?: Date): Promis
     mention_requests: string;
     gif_requests: string;
     news_requests: string;
+    auto_answer_requests: string;
     prompt_tokens: string;
     completion_tokens: string;
     image_count: string;
@@ -196,6 +219,7 @@ export async function getGlobalOpenAiUsageTotals(since?: Date): Promise<OpenAiUs
     mention_requests: string;
     gif_requests: string;
     news_requests: string;
+    auto_answer_requests: string;
     prompt_tokens: string;
     completion_tokens: string;
     image_count: string;
@@ -244,6 +268,7 @@ export async function getOpenAiUsageByChat(since?: Date, limit = 30): Promise<Op
     mention_requests: string;
     gif_requests: string;
     news_requests: string;
+    auto_answer_requests: string;
     prompt_tokens: string;
     completion_tokens: string;
     image_count: string;
@@ -275,6 +300,7 @@ export type ChatSettingsRow = {
   news_spheres: string[];
   news_next_run_at: Date | string | null;
   news_last_sent_on: string | null;
+  auto_answer_enabled: boolean;
 };
 
 export type DueNewsChat = {
@@ -285,7 +311,8 @@ export type DueNewsChat = {
 export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRow | undefined> {
   const result = await pool.query<ChatSettingsRow>(
     `SELECT summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
-            sarcasm_level, mention_enabled, news_enabled, news_spheres, news_next_run_at, news_last_sent_on
+            sarcasm_level, mention_enabled, news_enabled, news_spheres, news_next_run_at, news_last_sent_on,
+            auto_answer_enabled
      FROM chat_settings WHERE chat_id = $1`,
     [String(chatId)],
   );
@@ -296,8 +323,8 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
   await pool.query(
     `INSERT INTO chat_settings (
       chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
-      sarcasm_level, mention_enabled, news_enabled, news_spheres, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+      sarcasm_level, mention_enabled, news_enabled, news_spheres, auto_answer_enabled, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
     ON CONFLICT (chat_id) DO UPDATE SET
       summary_admin_only = EXCLUDED.summary_admin_only,
       default_message_count = EXCLUDED.default_message_count,
@@ -308,6 +335,7 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       mention_enabled = EXCLUDED.mention_enabled,
       news_enabled = EXCLUDED.news_enabled,
       news_spheres = EXCLUDED.news_spheres,
+      auto_answer_enabled = EXCLUDED.auto_answer_enabled,
       updated_at = now()`,
     [
       String(chatId),
@@ -320,6 +348,7 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       row.mention_enabled,
       row.news_enabled,
       row.news_spheres,
+      row.auto_answer_enabled,
     ],
   );
 }
@@ -411,6 +440,177 @@ export async function disableNewsForChat(chatId: number) {
 
 export async function deleteChatSettings(chatId: number) {
   await pool.query('DELETE FROM chat_settings WHERE chat_id = $1', [String(chatId)]);
+}
+
+export type PendingAutoAnswerStatus = 'pending' | 'claimed' | 'answered' | 'cancelled' | 'failed';
+
+export type PendingAutoAnswer = {
+  chatId: number;
+  messageId: number;
+  messageThreadId: number | null;
+  author: string;
+  questionText: string;
+  askerUserId: number | null;
+  createdAt: Date;
+  dueAt: Date;
+  status: PendingAutoAnswerStatus;
+  claimedUntil: Date | null;
+};
+
+type PendingAutoAnswerRow = {
+  chat_id: string;
+  message_id: number;
+  message_thread_id: number | null;
+  author: string;
+  question_text: string;
+  asker_user_id: string | null;
+  created_at: Date;
+  due_at: Date;
+  status: string;
+  claimed_until: Date | null;
+};
+
+function mapPendingAutoAnswer(row: PendingAutoAnswerRow): PendingAutoAnswer {
+  return {
+    chatId: Number(row.chat_id),
+    messageId: row.message_id,
+    messageThreadId: row.message_thread_id,
+    author: row.author,
+    questionText: row.question_text,
+    askerUserId: row.asker_user_id == null ? null : Number(row.asker_user_id),
+    createdAt: new Date(row.created_at),
+    dueAt: new Date(row.due_at),
+    status: row.status as PendingAutoAnswerStatus,
+    claimedUntil: row.claimed_until ? new Date(row.claimed_until) : null,
+  };
+}
+
+export async function enqueuePendingAutoAnswer(row: {
+  chatId: number;
+  messageId: number;
+  messageThreadId: number | null;
+  author: string;
+  questionText: string;
+  askerUserId: number | null;
+  createdAt: Date;
+  dueAt: Date;
+}): Promise<boolean> {
+  const result = await pool.query(
+    `INSERT INTO pending_auto_answers (
+      chat_id, message_id, message_thread_id, author, question_text, asker_user_id,
+      created_at, due_at, status, claimed_until
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', NULL)
+    ON CONFLICT (chat_id, message_id) DO NOTHING`,
+    [
+      String(row.chatId),
+      row.messageId,
+      row.messageThreadId,
+      row.author,
+      row.questionText,
+      row.askerUserId == null ? null : String(row.askerUserId),
+      row.createdAt,
+      row.dueAt,
+    ],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function listDuePendingAutoAnswers(now: Date, limit = 50): Promise<PendingAutoAnswer[]> {
+  const result = await pool.query<PendingAutoAnswerRow>(
+    `SELECT chat_id::text AS chat_id, message_id, message_thread_id, author, question_text,
+            asker_user_id::text AS asker_user_id, created_at, due_at, status, claimed_until
+     FROM pending_auto_answers
+     WHERE due_at <= $1::timestamptz
+       AND (
+         status = 'pending'
+         OR (status = 'claimed' AND claimed_until IS NOT NULL AND claimed_until <= $1::timestamptz)
+       )
+     ORDER BY due_at ASC
+     LIMIT $2`,
+    [now, limit],
+  );
+  return result.rows.map(mapPendingAutoAnswer);
+}
+
+export async function claimPendingAutoAnswer(
+  chatId: number,
+  messageId: number,
+  leaseUntil: Date,
+  now: Date,
+): Promise<PendingAutoAnswer | undefined> {
+  const result = await pool.query<PendingAutoAnswerRow>(
+    `UPDATE pending_auto_answers
+     SET status = 'claimed', claimed_until = $3::timestamptz
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND due_at <= $4::timestamptz
+       AND (
+         status = 'pending'
+         OR (status = 'claimed' AND claimed_until IS NOT NULL AND claimed_until <= $4::timestamptz)
+       )
+     RETURNING chat_id::text AS chat_id, message_id, message_thread_id, author, question_text,
+               asker_user_id::text AS asker_user_id, created_at, due_at, status, claimed_until`,
+    [String(chatId), messageId, leaseUntil, now],
+  );
+  const row = result.rows[0];
+  return row ? mapPendingAutoAnswer(row) : undefined;
+}
+
+export async function markPendingAutoAnswerStatus(
+  chatId: number,
+  messageId: number,
+  status: 'answered' | 'cancelled' | 'failed',
+) {
+  await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = $3, claimed_until = NULL
+     WHERE chat_id = $1 AND message_id = $2 AND status IN ('pending', 'claimed')`,
+    [String(chatId), messageId, status],
+  );
+}
+
+/** Cancel pending/claimed rows that a later human message engages with. */
+export async function cancelPendingAutoAnswersForScope(params: {
+  chatId: number;
+  replyToMessageId?: number;
+  messageThreadId?: number | null;
+  isForum: boolean;
+}) {
+  const { chatId, replyToMessageId, messageThreadId, isForum } = params;
+  if (replyToMessageId != null) {
+    await pool.query(
+      `UPDATE pending_auto_answers
+       SET status = 'cancelled', claimed_until = NULL
+       WHERE chat_id = $1 AND message_id = $2 AND status IN ('pending', 'claimed')`,
+      [String(chatId), replyToMessageId],
+    );
+  }
+  if (isForum) {
+    await pool.query(
+      `UPDATE pending_auto_answers
+       SET status = 'cancelled', claimed_until = NULL
+       WHERE chat_id = $1
+         AND message_thread_id IS NOT DISTINCT FROM $2
+         AND status IN ('pending', 'claimed')`,
+      [String(chatId), messageThreadId ?? null],
+    );
+    return;
+  }
+  await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = 'cancelled', claimed_until = NULL
+     WHERE chat_id = $1 AND status IN ('pending', 'claimed')`,
+    [String(chatId)],
+  );
+}
+
+export async function cancelAllPendingAutoAnswersForChat(chatId: number) {
+  await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = 'cancelled', claimed_until = NULL
+     WHERE chat_id = $1 AND status IN ('pending', 'claimed')`,
+    [String(chatId)],
+  );
 }
 
 export type VideoCacheEntry = {

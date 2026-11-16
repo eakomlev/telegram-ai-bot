@@ -12,6 +12,7 @@ export type ChatSettings = {
   mentionEnabled: boolean;
   newsEnabled: boolean;
   newsSpheres: NewsSphereId[];
+  autoAnswerEnabled: boolean;
 };
 
 const COUNT_STEPS = [50, 100, 200, 500, 1000];
@@ -29,6 +30,7 @@ export function defaultChatSettings(): ChatSettings {
     mentionEnabled: config.MENTION_ENABLED === 'true',
     newsEnabled: false,
     newsSpheres: [],
+    autoAnswerEnabled: false,
   };
 }
 
@@ -43,6 +45,7 @@ function fromRow(row: ChatSettingsRow): ChatSettings {
     mentionEnabled: row.mention_enabled ?? true,
     newsEnabled: row.news_enabled ?? false,
     newsSpheres: sanitizeSpheres(row.news_spheres ?? []),
+    autoAnswerEnabled: row.auto_answer_enabled ?? false,
   };
 }
 
@@ -69,6 +72,7 @@ export async function resolveChatSettings(chatId: number): Promise<ChatSettings>
     mentionEnabled: row.mention_enabled ?? defaultChatSettings().mentionEnabled,
     newsEnabled: row.news_enabled ?? false,
     newsSpheres: sanitizeSpheres(row.news_spheres ?? []),
+    autoAnswerEnabled: row.auto_answer_enabled ?? false,
   };
 }
 
@@ -92,6 +96,7 @@ export async function saveChatSettings(chatId: number, settings: ChatSettings) {
     news_spheres: next.newsSpheres,
     news_next_run_at: null,
     news_last_sent_on: null,
+    auto_answer_enabled: next.autoAnswerEnabled,
   });
   return next;
 }
@@ -127,6 +132,7 @@ export function formatSettings(settings: ChatSettings) {
     `• Сообщений по умолчанию в /summary: ${settings.defaultMessageCount}`,
     `• Сарказм: ${settings.sarcasmLevel}%`,
     `• Ответы на @упоминания: ${on(settings.mentionEnabled)}`,
+    `• Автоответ на вопросы без ответа: ${on(settings.autoAnswerEnabled)}`,
     `• Автозагрузка видео: ${on(settings.videoEnabled)}`,
     `• Автозагрузка картинок: ${on(settings.galleryEnabled)}`,
     `• Пауза между медиа-ссылками: ${settings.mediaCooldownSeconds} сек.`,

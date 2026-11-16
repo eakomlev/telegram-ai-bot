@@ -9,7 +9,7 @@ import {
   saveChatSettings,
   type ChatSettings,
 } from './chat-settings.js';
-import { deleteChatSettings } from './db.js';
+import { cancelAllPendingAutoAnswersForChat, deleteChatSettings } from './db.js';
 import { isNewsSphereId, NEWS_SPHERES } from './news-spheres.js';
 import { scheduleNewsIfNeeded } from './news-scheduler.js';
 
@@ -38,6 +38,8 @@ function settingsKeyboard(settings: ChatSettings) {
     .text(`Сарказм: ${settings.sarcasmLevel}%`, `${PREFIX}sarcasm`)
     .row()
     .text(`${on(settings.mentionEnabled)} Ответы на @упоминания`, `${PREFIX}mention`)
+    .row()
+    .text(`${on(settings.autoAnswerEnabled)} Автоответ на вопросы без ответа`, `${PREFIX}autoans`)
     .row()
     .text(`${on(settings.videoEnabled)} Видео`, `${PREFIX}video`)
     .text(`${on(settings.galleryEnabled)} Картинки`, `${PREFIX}gallery`)
@@ -112,6 +114,16 @@ async function applyAction(
       });
     case 'mention':
       return saveChatSettings(chatId, { ...settings, mentionEnabled: !settings.mentionEnabled });
+    case 'autoans': {
+      const enabled = !settings.autoAnswerEnabled;
+      const next = await saveChatSettings(chatId, { ...settings, autoAnswerEnabled: enabled });
+      if (!enabled) {
+        await cancelAllPendingAutoAnswersForChat(chatId).catch(() =>
+          console.error('Cancel pending auto-answers failed', { chatId }),
+        );
+      }
+      return next;
+    }
     case 'news': {
       const next = await saveChatSettings(chatId, { ...settings, newsEnabled: !settings.newsEnabled });
       await scheduleNewsIfNeeded(chatId, next);
@@ -123,6 +135,9 @@ async function applyAction(
       return 'back';
     case 'reset':
       await deleteChatSettings(chatId);
+      await cancelAllPendingAutoAnswersForChat(chatId).catch(() =>
+        console.error('Cancel pending auto-answers failed', { chatId }),
+      );
       return defaultChatSettings();
     case 'close':
       return 'close';
