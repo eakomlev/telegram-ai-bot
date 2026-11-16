@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { config } from './config.js';
+import { moscowDateString } from './moscow-time.js';
 import { buildAiUsage, type AiUsage } from './usage.js';
 
 const client = new OpenAI({
@@ -358,6 +359,55 @@ export async function suggestGifReaction(json: string, sarcasmLevel = 0): Promis
   return {
     query,
     caption: caption || 'Вот реакция чата.',
+    usage: buildAiUsage({
+      model: config.OPENAI_MODEL,
+      promptTokens: result.usage?.prompt_tokens,
+      completionTokens: result.usage?.completion_tokens,
+    }),
+  };
+}
+
+export function buildNewsSystemPrompt(sphereLabel: string) {
+  return `Ты — весёлый коллега из досугового Telegram-чата. Раз в день кидаешь одну свежую интересную новость по теме «${sphereLabel}».
+
+Правила
+• Ровно одна новость: живой короткий рассказ, будто делишься за обедом, а не лента и не дайджест.
+• Пиши по-русски, обычным текстом. Не используй Markdown и HTML.
+• Бери только свежие новости примерно за последние 48 часов.
+• Не выдумывай факты, цифры, цитаты, названия и ссылки. Не добавляй фейковые URL.
+• Если уверенности в факте нет — лучше сформулируй осторожнее или выбери другую известную тебе свежую новость по теме.
+• Без кликбейта, политики ради политики, NSFW и токсичности.
+• Можно добавить лёгкую доброжелательную шутку в конце, но новость должна остаться понятной.
+• Начни с эмодзи и короткого заголовка, затем 2–5 предложений сути.
+
+Главный принцип: интересно, коротко и по делу — как сообщение друга в чат, а не как статья.`;
+}
+
+export async function generateInterestingNews(
+  sphereId: string,
+  sphereLabelText: string,
+): Promise<{ text: string; usage: AiUsage }> {
+  const moscowDay = moscowDateString();
+  const result = await client.chat.completions.create({
+    model: config.OPENAI_MODEL,
+    max_completion_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
+    messages: [
+      { role: 'system', content: buildNewsSystemPrompt(sphereLabelText) },
+      {
+        role: 'user',
+        content:
+          `Сфера: ${sphereLabelText} (${sphereId}).\n` +
+          `Сегодня по Москве: ${moscowDay}.\n` +
+          'Пришли одну свежую интересную новость по этой сфере.',
+      },
+    ],
+  });
+  const choice = result.choices[0];
+  const content = choice?.message.content?.trim();
+  if (!content) throw new Error('Empty news model response');
+  const text = content + (choice?.finish_reason === 'length' ? '\n\nОтвет сокращён из-за ограничения длины.' : '');
+  return {
+    text,
     usage: buildAiUsage({
       model: config.OPENAI_MODEL,
       promptTokens: result.usage?.prompt_tokens,

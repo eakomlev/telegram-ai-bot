@@ -29,6 +29,7 @@ import { maybeHandleMention, setBotIdentity } from './mention.js';
 import { maybeRepostVideo } from './video.js';
 import { maybeRepostGallery } from './gallery.js';
 import { stopMediaJobs } from './media-jobs.js';
+import { startNewsScheduler, stopNewsScheduler } from './news-scheduler.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -47,6 +48,8 @@ const help = `Я сохраняю текстовые сообщения и по�
 /usage — оценка расходов OpenAI по этой группе (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
+
+В /settings можно включить ежедневную интересную новость (случайное время 10:00–21:00 по Москве) по выбранным сферам.
 
 Упомяните меня (@бот) в сообщении — отвечу через OpenAI. Текст и картинки из сообщения и из цитаты учитываю как контекст; в ответе тоже могу прислать картинку.
 Если в запросе есть слова вроде «мем», «демотиватор», «drake» — сделаю мем-картинку.
@@ -131,6 +134,7 @@ bot.command('stats', async (ctx) => {
     summaryRequests: 0,
     mentionRequests: 0,
     gifRequests: 0,
+    newsRequests: 0,
     promptTokens: 0,
     completionTokens: 0,
     imageCount: 0,
@@ -155,7 +159,7 @@ bot.command('stats', async (ctx) => {
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст, подписи к медиа, отображаемое имя автора, время и ID сообщений в Postgres на ${config.RETENTION_DAYS} дней. ` +
   `Учёт токенов и оценочных расходов OpenAI, а также ежедневные снимки числа участников групп, хранятся ${config.USAGE_RETENTION_DAYS} дней. ` +
-  'При /summary, /gif и @упоминаниях данные уходят в OpenAI API; для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
+  'При /summary, /gif, ежедневных новостях и @упоминаниях данные уходят в OpenAI API; для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
   'Ссылки на видео и посты с картинками передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
   'Администратору следует предупредить участников. Доступ и удаление данных — через владельца бота.',
 ));
@@ -275,6 +279,7 @@ async function shutdown() {
   if (stopping) return;
   stopping = true;
   if (cleanupTimer) clearInterval(cleanupTimer);
+  stopNewsScheduler();
   await stopMediaJobs();
   if (bot.isRunning()) await bot.stop();
   await pool.end();
@@ -290,6 +295,7 @@ try {
     void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
   }, config.RETENTION_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
+  startNewsScheduler(bot.api);
   const me = await bot.api.getMe();
   if (!me.username) throw new Error('Bot username is required for @mentions');
   setBotIdentity(me.id, me.username);

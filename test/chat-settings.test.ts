@@ -26,7 +26,20 @@ test('defaults and format mention admin-only controls', () => {
   assert.match(text, /Саммари только админам/);
   assert.match(text, /Автозагрузка видео/);
   assert.match(text, /Сарказм:/);
+  assert.match(text, /Ежедневная новость: выкл/);
+  assert.match(text, /Сферы новостей: не выбраны/);
   assert.match(text, new RegExp(String(settings.defaultMessageCount)));
+});
+
+test('formatSettings lists selected news spheres', () => {
+  const text = formatSettings({
+    ...defaultChatSettings(),
+    newsEnabled: true,
+    newsSpheres: ['ai', 'games'],
+  });
+  assert.match(text, /Ежедневная новость: вкл/);
+  assert.match(text, /ИИ \/ нейросети/);
+  assert.match(text, /Игры/);
 });
 
 test('summary prompt stays factual and softens high sarcasm', () => {

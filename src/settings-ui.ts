@@ -10,6 +10,8 @@ import {
   type ChatSettings,
 } from './chat-settings.js';
 import { deleteChatSettings } from './db.js';
+import { isNewsSphereId, NEWS_SPHERES } from './news-spheres.js';
+import { scheduleNewsIfNeeded } from './news-scheduler.js';
 
 const PREFIX = 'set:';
 
@@ -42,8 +44,37 @@ function settingsKeyboard(settings: ChatSettings) {
     .row()
     .text(`Пауза медиа: ${settings.mediaCooldownSeconds}с`, `${PREFIX}cool`)
     .row()
+    .text(`${on(settings.newsEnabled)} Ежедневная новость`, `${PREFIX}news`)
+    .row()
+    .text('Сферы новостей…', `${PREFIX}news_menu`)
+    .row()
     .text('Сбросить', `${PREFIX}reset`)
     .text('Закрыть', `${PREFIX}close`);
+}
+
+function newsMenuKeyboard(settings: ChatSettings) {
+  const on = (value: boolean) => (value ? '✅' : '❌');
+  const keyboard = new InlineKeyboard();
+  for (const [index, sphere] of NEWS_SPHERES.entries()) {
+    const selected = settings.newsSpheres.includes(sphere.id);
+    keyboard.text(`${on(selected)} ${sphere.label}`, `${PREFIX}ns:${sphere.id}`);
+    if (index % 2 === 1) keyboard.row();
+  }
+  if (NEWS_SPHERES.length % 2 === 1) keyboard.row();
+  keyboard.text('← Назад', `${PREFIX}back`);
+  return keyboard;
+}
+
+function formatNewsMenu(settings: ChatSettings) {
+  const spheres = settings.newsSpheres.length
+    ? settings.newsSpheres.map((id) => NEWS_SPHERES.find((s) => s.id === id)?.label ?? id).join(', ')
+    : 'пока ничего не выбрано';
+  return [
+    'Сферы ежедневной новости:',
+    'Выберите одну или несколько тем. Раз в день бот пришлёт одну свежую новость по случайной из выбранных.',
+    '',
+    `Сейчас: ${spheres}`,
+  ].join('\n');
 }
 
 export async function replyWithSettings(ctx: Context) {
@@ -52,7 +83,11 @@ export async function replyWithSettings(ctx: Context) {
   await ctx.reply(formatSettings(settings), { reply_markup: settingsKeyboard(settings) });
 }
 
-async function applyAction(settings: ChatSettings, action: string, chatId: number): Promise<ChatSettings | 'close' | null> {
+async function applyAction(
+  settings: ChatSettings,
+  action: string,
+  chatId: number,
+): Promise<ChatSettings | 'close' | 'news_menu' | 'back' | null> {
   switch (action) {
     case 'admin':
       return saveChatSettings(chatId, { ...settings, summaryAdminOnly: !settings.summaryAdminOnly });
@@ -77,12 +112,32 @@ async function applyAction(settings: ChatSettings, action: string, chatId: numbe
       });
     case 'mention':
       return saveChatSettings(chatId, { ...settings, mentionEnabled: !settings.mentionEnabled });
+    case 'news': {
+      const next = await saveChatSettings(chatId, { ...settings, newsEnabled: !settings.newsEnabled });
+      await scheduleNewsIfNeeded(chatId, next);
+      return next;
+    }
+    case 'news_menu':
+      return 'news_menu';
+    case 'back':
+      return 'back';
     case 'reset':
       await deleteChatSettings(chatId);
       return defaultChatSettings();
     case 'close':
       return 'close';
     default:
+      if (action.startsWith('ns:')) {
+        const id = action.slice(3);
+        if (!isNewsSphereId(id)) return null;
+        const has = settings.newsSpheres.includes(id);
+        const newsSpheres = has
+          ? settings.newsSpheres.filter((sphere) => sphere !== id)
+          : [...settings.newsSpheres, id];
+        const next = await saveChatSettings(chatId, { ...settings, newsSpheres });
+        await scheduleNewsIfNeeded(chatId, next);
+        return next;
+      }
       return null;
   }
 }
@@ -112,7 +167,22 @@ export async function handleSettingsCallback(ctx: Context) {
     await ctx.deleteMessage().catch(() => {});
     return true;
   }
+  if (next === 'news_menu') {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(formatNewsMenu(current), { reply_markup: newsMenuKeyboard(current) }).catch(() => {});
+    return true;
+  }
+  if (next === 'back') {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(formatSettings(current), { reply_markup: settingsKeyboard(current) }).catch(() => {});
+    return true;
+  }
   await ctx.answerCallbackQuery({ text: 'Сохранено' });
-  await ctx.editMessageText(formatSettings(next), { reply_markup: settingsKeyboard(next) }).catch(() => {});
+  const showNewsMenu = action === 'news_menu' || action.startsWith('ns:');
+  if (showNewsMenu) {
+    await ctx.editMessageText(formatNewsMenu(next), { reply_markup: newsMenuKeyboard(next) }).catch(() => {});
+  } else {
+    await ctx.editMessageText(formatSettings(next), { reply_markup: settingsKeyboard(next) }).catch(() => {});
+  }
   return true;
 }

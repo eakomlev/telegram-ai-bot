@@ -51,6 +51,12 @@ export async function initializeDatabase() {
     );
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS sarcasm_level INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS mention_enabled BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_spheres TEXT[] NOT NULL DEFAULT '{}';
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_next_run_at TIMESTAMPTZ NULL;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_last_sent_on DATE NULL;
+    CREATE INDEX IF NOT EXISTS chat_settings_news_due ON chat_settings (news_next_run_at)
+      WHERE news_enabled;
     CREATE TABLE IF NOT EXISTS openai_usage (
       id BIGSERIAL PRIMARY KEY,
       chat_id BIGINT NOT NULL,
@@ -73,7 +79,7 @@ export async function initializeDatabase() {
   `);
 }
 
-export type OpenAiUsageKind = 'summary' | 'mention' | 'gif';
+export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news';
 
 export type OpenAiUsageRecord = {
   kind: OpenAiUsageKind;
@@ -89,6 +95,7 @@ export type OpenAiUsageTotals = {
   summaryRequests: number;
   mentionRequests: number;
   gifRequests: number;
+  newsRequests: number;
   promptTokens: number;
   completionTokens: number;
   imageCount: number;
@@ -100,6 +107,7 @@ const emptyUsageTotals = (): OpenAiUsageTotals => ({
   summaryRequests: 0,
   mentionRequests: 0,
   gifRequests: 0,
+  newsRequests: 0,
   promptTokens: 0,
   completionTokens: 0,
   imageCount: 0,
@@ -128,6 +136,7 @@ function mapUsageTotals(row: {
   summary_requests: string;
   mention_requests: string;
   gif_requests: string;
+  news_requests: string;
   prompt_tokens: string;
   completion_tokens: string;
   image_count: string;
@@ -139,6 +148,7 @@ function mapUsageTotals(row: {
     summaryRequests: Number(row.summary_requests) || 0,
     mentionRequests: Number(row.mention_requests) || 0,
     gifRequests: Number(row.gif_requests) || 0,
+    newsRequests: Number(row.news_requests) || 0,
     promptTokens: Number(row.prompt_tokens) || 0,
     completionTokens: Number(row.completion_tokens) || 0,
     imageCount: Number(row.image_count) || 0,
@@ -151,6 +161,7 @@ const USAGE_TOTALS_SELECT = `
   COUNT(*) FILTER (WHERE kind = 'summary')::text AS summary_requests,
   COUNT(*) FILTER (WHERE kind = 'mention')::text AS mention_requests,
   COUNT(*) FILTER (WHERE kind = 'gif')::text AS gif_requests,
+  COUNT(*) FILTER (WHERE kind = 'news')::text AS news_requests,
   COALESCE(SUM(prompt_tokens), 0)::text AS prompt_tokens,
   COALESCE(SUM(completion_tokens), 0)::text AS completion_tokens,
   COALESCE(SUM(image_count), 0)::text AS image_count,
@@ -163,6 +174,7 @@ export async function getOpenAiUsageTotals(chatId: number, since?: Date): Promis
     summary_requests: string;
     mention_requests: string;
     gif_requests: string;
+    news_requests: string;
     prompt_tokens: string;
     completion_tokens: string;
     image_count: string;
@@ -183,6 +195,7 @@ export async function getGlobalOpenAiUsageTotals(since?: Date): Promise<OpenAiUs
     summary_requests: string;
     mention_requests: string;
     gif_requests: string;
+    news_requests: string;
     prompt_tokens: string;
     completion_tokens: string;
     image_count: string;
@@ -230,6 +243,7 @@ export async function getOpenAiUsageByChat(since?: Date, limit = 30): Promise<Op
     summary_requests: string;
     mention_requests: string;
     gif_requests: string;
+    news_requests: string;
     prompt_tokens: string;
     completion_tokens: string;
     image_count: string;
@@ -257,11 +271,21 @@ export type ChatSettingsRow = {
   media_cooldown_seconds: number;
   sarcasm_level: number;
   mention_enabled: boolean;
+  news_enabled: boolean;
+  news_spheres: string[];
+  news_next_run_at: Date | string | null;
+  news_last_sent_on: string | null;
+};
+
+export type DueNewsChat = {
+  chatId: number;
+  newsSpheres: string[];
 };
 
 export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRow | undefined> {
   const result = await pool.query<ChatSettingsRow>(
-    `SELECT summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds, sarcasm_level, mention_enabled
+    `SELECT summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
+            sarcasm_level, mention_enabled, news_enabled, news_spheres, news_next_run_at, news_last_sent_on
      FROM chat_settings WHERE chat_id = $1`,
     [String(chatId)],
   );
@@ -271,8 +295,9 @@ export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRo
 export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
   await pool.query(
     `INSERT INTO chat_settings (
-      chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds, sarcasm_level, mention_enabled, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+      chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
+      sarcasm_level, mention_enabled, news_enabled, news_spheres, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
     ON CONFLICT (chat_id) DO UPDATE SET
       summary_admin_only = EXCLUDED.summary_admin_only,
       default_message_count = EXCLUDED.default_message_count,
@@ -281,6 +306,8 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       media_cooldown_seconds = EXCLUDED.media_cooldown_seconds,
       sarcasm_level = EXCLUDED.sarcasm_level,
       mention_enabled = EXCLUDED.mention_enabled,
+      news_enabled = EXCLUDED.news_enabled,
+      news_spheres = EXCLUDED.news_spheres,
       updated_at = now()`,
     [
       String(chatId),
@@ -291,7 +318,94 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       row.media_cooldown_seconds,
       row.sarcasm_level,
       row.mention_enabled,
+      row.news_enabled,
+      row.news_spheres,
     ],
+  );
+}
+
+export async function listDueNewsChats(now: Date): Promise<DueNewsChat[]> {
+  const result = await pool.query<{ chat_id: string; news_spheres: string[] }>(
+    `SELECT chat_id::text AS chat_id, news_spheres
+     FROM chat_settings
+     WHERE news_enabled = true
+       AND cardinality(news_spheres) > 0
+       AND news_next_run_at IS NOT NULL
+       AND news_next_run_at <= $1::timestamptz
+       AND (news_last_sent_on IS NULL OR news_last_sent_on < ($1 AT TIME ZONE 'Europe/Moscow')::date)`,
+    [now],
+  );
+  return result.rows.map((row) => ({
+    chatId: Number(row.chat_id),
+    newsSpheres: row.news_spheres ?? [],
+  }));
+}
+
+/**
+ * Atomically claim a due news send with a short in-progress lease on news_next_run_at.
+ * Does not mark the day as sent; caller must markNewsSent or soft-reschedule after send.
+ */
+export async function claimNewsSend(
+  chatId: number,
+  moscowDate: string,
+  leaseUntil: Date,
+  now: Date,
+): Promise<DueNewsChat | undefined> {
+  const result = await pool.query<{ chat_id: string; news_spheres: string[] }>(
+    `UPDATE chat_settings
+     SET news_next_run_at = $3::timestamptz, updated_at = now()
+     WHERE chat_id = $1
+       AND news_enabled = true
+       AND cardinality(news_spheres) > 0
+       AND news_next_run_at IS NOT NULL
+       AND news_next_run_at <= $4::timestamptz
+       AND (news_last_sent_on IS NULL OR news_last_sent_on < $2::date)
+     RETURNING chat_id::text AS chat_id, news_spheres`,
+    [String(chatId), moscowDate, leaseUntil, now],
+  );
+  const row = result.rows[0];
+  if (!row) return;
+  return { chatId: Number(row.chat_id), newsSpheres: row.news_spheres ?? [] };
+}
+
+/** Mark today's send and schedule the next day's window in one update. */
+export async function markNewsSent(chatId: number, moscowDate: string, nextRunAt: Date) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET news_last_sent_on = $2::date,
+         news_next_run_at = $3::timestamptz,
+         updated_at = now()
+     WHERE chat_id = $1`,
+    [String(chatId), moscowDate, nextRunAt],
+  );
+}
+
+/** Failsafe after a delivered post: block same-day reclaim even if next_run update failed. */
+export async function markNewsSentDay(chatId: number, moscowDate: string) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET news_last_sent_on = $2::date, updated_at = now()
+     WHERE chat_id = $1`,
+    [String(chatId), moscowDate],
+  );
+}
+
+export async function rescheduleNewsRun(chatId: number, nextRunAt: Date | null) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET news_next_run_at = $2::timestamptz, updated_at = now()
+     WHERE chat_id = $1`,
+    [String(chatId), nextRunAt],
+  );
+}
+
+/** Stop daily news for a chat that can no longer receive messages (403 / kicked / gone). */
+export async function disableNewsForChat(chatId: number) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET news_enabled = false, news_next_run_at = NULL, updated_at = now()
+     WHERE chat_id = $1`,
+    [String(chatId)],
   );
 }
 

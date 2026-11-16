@@ -107,6 +107,8 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | `USAGE_RETENTION_DAYS` | `90` | Срок хранения записей расходов OpenAI |
 | `GIPHY_API_KEY` | пусто | Ключ Giphy для `/gif` (без ключа команда недоступна) |
 | `GIF_DEFAULT_MESSAGE_COUNT` / `GIF_MAX_MESSAGE_COUNT` | `40` / `80` | Сколько сообщений смотреть для GIF-реакции |
+| `NEWS_ENABLED` | `true` | Глобально включить ежедневные новости в группах с настройкой |
+| `NEWS_MAX_OUTPUT_TOKENS` / `NEWS_TICK_INTERVAL_MS` / `NEWS_RETRY_MINUTES` | `700` / `60000` / `20` | Лимит ответа, интервал опроса планировщика и мягкий повтор при сбое |
 | `ALLOWED_CHAT_IDS` | пусто | Разрешённые группы через запятую, например `-1001234567890,-1009876543210`; пусто — все группы |
 | `OWNER_USER_ID` | пусто | Ваш Telegram user id; в личке `/stats` — сводка расходов OpenAI по всем группам только для вас |
 | `SUMMARY_ADMIN_ONLY` | `true` | Только администраторы могут тратить API-баланс |
