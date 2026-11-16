@@ -19,9 +19,13 @@ export async function initializeDatabase() {
       author TEXT NOT NULL,
       text TEXT NOT NULL,
       sent_at TIMESTAMPTZ NOT NULL,
+      message_thread_id INTEGER NULL,
       PRIMARY KEY (chat_id, message_id)
     );
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_thread_id INTEGER NULL;
     CREATE INDEX IF NOT EXISTS messages_chat_time ON messages (chat_id, sent_at DESC, message_id DESC);
+    CREATE INDEX IF NOT EXISTS messages_chat_thread_time
+      ON messages (chat_id, message_thread_id, sent_at DESC, message_id DESC);
     CREATE TABLE IF NOT EXISTS summary_requests (
       chat_id BIGINT PRIMARY KEY,
       requested_at TIMESTAMPTZ NOT NULL
@@ -813,10 +817,50 @@ export async function deleteVideoCache(sourceUrl: string) {
 }
 
 export async function saveMessage(chatId: number, message: ChatMessage) {
-  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (chat_id, message_id) DO UPDATE SET author = EXCLUDED.author, text = EXCLUDED.text`,
-  [String(chatId), message.message_id, message.author, message.text, message.sent_at]);
+  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at, message_thread_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (chat_id, message_id) DO UPDATE SET
+      author = EXCLUDED.author,
+      text = EXCLUDED.text,
+      message_thread_id = EXCLUDED.message_thread_id`,
+  [
+    String(chatId),
+    message.message_id,
+    message.author,
+    message.text,
+    message.sent_at,
+    message.message_thread_id ?? null,
+  ]);
+}
+
+/** Preceding lines for auto-answer OpenAI context (newest-first SQL, returned chronological). */
+export async function selectPrecedingMessagesForAutoAnswer(params: {
+  chatId: number;
+  questionMessageId: number;
+  questionCreatedAt: Date;
+  messageThreadId: number | null;
+  lookbackMinutes: number;
+  maxMessages: number;
+}): Promise<ChatMessage[]> {
+  if (params.maxMessages <= 0) return [];
+  const result = await pool.query<ChatMessage>(`
+    SELECT message_id, author, text, sent_at, message_thread_id
+    FROM messages
+    WHERE chat_id = $1
+      AND message_id < $2
+      AND sent_at >= $3::timestamptz - ($4::int * interval '1 minute')
+      AND message_thread_id IS NOT DISTINCT FROM $5
+    ORDER BY sent_at DESC, message_id DESC
+    LIMIT $6`,
+  [
+    String(params.chatId),
+    params.questionMessageId,
+    params.questionCreatedAt,
+    params.lookbackMinutes,
+    params.messageThreadId,
+    params.maxMessages,
+  ]);
+  return result.rows.reverse();
 }
 
 export async function selectMessages(chatId: number, selection: Selection, beforeId: number, connection: pg.PoolClient) {

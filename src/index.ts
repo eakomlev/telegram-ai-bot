@@ -278,6 +278,7 @@ async function store(ctx: Context) {
     author: author || 'Участник',
     text,
     sent_at: new Date(message.date * 1000),
+    message_thread_id: message.message_thread_id ?? null,
   });
   if (ctx.message) {
     if (await maybeHandleMention(ctx)) return;

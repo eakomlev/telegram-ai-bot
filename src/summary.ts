@@ -1,5 +1,12 @@
 export type Selection = { kind: 'count'; count: number } | { kind: 'hours'; hours: number };
-export type ChatMessage = { message_id: number; author: string; text: string; sent_at: Date };
+export type ChatMessage = {
+  message_id: number;
+  author: string;
+  text: string;
+  sent_at: Date;
+  /** Forum topic id; null/undefined for non-forum or General. */
+  message_thread_id?: number | null;
+};
 
 export function parseSelection(
   input: string,
