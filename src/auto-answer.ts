@@ -22,6 +22,10 @@ const LI_PARTICLE_RE = /(?:^|[^\p{L}\p{N}])[\p{L}]{2,}(?:\s+|\s*[,–—-]\s*)л
 
 const EMOJI_ONLY_RE = /^[\p{Extended_Pictographic}\p{Emoji_Component}\s\uFE0F\u200D]+$/u;
 
+/** Short reaction chatter that often ends with ? but is not a real group question. */
+const SHORT_CHATTER_RE =
+  /^(ок|окей|да|нет|ну|ага|угу|лол|кек|хех|хм|эм|серь[её]зно|правда|точно|реально|why|what|lol|yep|nah|wow|yes|no|huh)$/iu;
+
 function entitiesOf(message: Message): MessageEntity[] {
   return message.entities ?? message.caption_entities ?? [];
 }
@@ -32,18 +36,35 @@ function authorOf(message: Message): string {
   return name || message.from?.username || 'Участник';
 }
 
+function lettersOnly(value: string) {
+  return value.replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function hasInterrogativeCue(value: string) {
+  return STRONG_INTERROGATIVE_RE.test(value)
+    || LEADING_INTERROGATIVE_RE.test(value)
+    || LI_PARTICLE_RE.test(value);
+}
+
 /** True when the text looks like a general question to the group (precision over recall). */
 export function isGeneralQuestion(text: string): boolean {
   const value = text.trim();
   if (!value) return false;
   if (EMOJI_ONLY_RE.test(value)) return false;
 
-  const hasQuestionMark = /[?？]/.test(value);
-  if (hasQuestionMark) return true;
+  const letters = lettersOnly(value);
+  const letterCount = Array.from(letters).length;
+  if (letterCount < 2) return false;
+  if (SHORT_CHATTER_RE.test(letters)) return false;
 
-  if (STRONG_INTERROGATIVE_RE.test(value)) return true;
-  if (LEADING_INTERROGATIVE_RE.test(value)) return true;
-  if (LI_PARTICLE_RE.test(value)) return true;
+  const hasQuestionMark = /[?？]/.test(value);
+  if (hasQuestionMark) {
+    if (letterCount >= 6) return true;
+    // Very short with ?: only if there is a clear interrogative cue («Кто?»).
+    return hasInterrogativeCue(value);
+  }
+
+  if (hasInterrogativeCue(value)) return true;
 
   // Avoid enrolling very short non-interrogative chatter.
   if (Array.from(value).length < 12) return false;

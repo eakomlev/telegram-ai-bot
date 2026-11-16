@@ -8,7 +8,11 @@ import {
   messageHasAnyMention,
   shouldEnqueueAutoAnswer,
 } from '../src/auto-answer.js';
-import { autoAnswerClaimLeaseUntil } from '../src/auto-answer-scheduler.js';
+import {
+  autoAnswerClaimLeaseUntil,
+  needsOpenAiGeneration,
+  ownsAutoAnswerClaim,
+} from '../src/auto-answer-scheduler.js';
 import { setBotIdentity } from '../src/mention.js';
 
 setBotIdentity(42, 'summary_bot');
@@ -27,6 +31,15 @@ function textMessage(text: string, overrides: Partial<Message> = {}): Message {
 test('isGeneralQuestion: question mark is a strong yes', () => {
   assert.equal(isGeneralQuestion('Кто-нибудь знает ресторан рядом?'), true);
   assert.equal(isGeneralQuestion('Есть идеи？'), true);
+  assert.equal(isGeneralQuestion('Кто?'), true);
+});
+
+test('isGeneralQuestion: rejects short ? chatter', () => {
+  assert.equal(isGeneralQuestion('ок?'), false);
+  assert.equal(isGeneralQuestion('да?'), false);
+  assert.equal(isGeneralQuestion('серьёзно?'), false);
+  assert.equal(isGeneralQuestion('нет?'), false);
+  assert.equal(isGeneralQuestion('?'), false);
 });
 
 test('isGeneralQuestion: Russian interrogatives and ли particle', () => {
@@ -149,6 +162,36 @@ test('autoAnswerClaimLeaseUntil follows configured lease', () => {
   const now = new Date('2024-03-10T12:00:00.000Z');
   const lease = autoAnswerClaimLeaseUntil(now);
   assert.equal(lease.getTime() - now.getTime(), 180_000);
+});
+
+test('ownsAutoAnswerClaim requires matching lease token', () => {
+  const lease = new Date('2024-03-10T12:03:00.000Z');
+  assert.equal(
+    ownsAutoAnswerClaim({ status: 'claimed', claimedUntil: lease }, lease),
+    true,
+  );
+  assert.equal(
+    ownsAutoAnswerClaim(
+      { status: 'claimed', claimedUntil: new Date('2024-03-10T12:04:00.000Z') },
+      lease,
+    ),
+    false,
+  );
+  assert.equal(
+    ownsAutoAnswerClaim({ status: 'cancelled', claimedUntil: lease }, lease),
+    false,
+  );
+  assert.equal(
+    ownsAutoAnswerClaim({ status: 'claimed', claimedUntil: null }, lease),
+    false,
+  );
+});
+
+test('needsOpenAiGeneration skips when answer_text already persisted', () => {
+  assert.equal(needsOpenAiGeneration(null), true);
+  assert.equal(needsOpenAiGeneration(''), true);
+  assert.equal(needsOpenAiGeneration('  '), true);
+  assert.equal(needsOpenAiGeneration('Уже готовый ответ'), false);
 });
 
 test('auto-answer system prompt stays plain-text and brief', async () => {

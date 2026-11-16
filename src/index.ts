@@ -100,6 +100,14 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
+/** Any human activity (commands, stickers, photos, voice, text, …) cancels unanswered waits. */
+bot.use(async (ctx, next) => {
+  if (ctx.message && !(ctx.message.from?.is_bot && !ctx.message.sender_chat)) {
+    await cancelPendingAutoAnswersForActivity(ctx).catch(() => {});
+  }
+  await next();
+});
+
 bot.command(['start', 'help'], (ctx) => ctx.reply(help));
 bot.command('chatid', (ctx) => ctx.reply(`ID группы: ${ctx.chat.id}`));
 bot.command('settings', (ctx) => replyWithSettings(ctx));
@@ -261,8 +269,6 @@ async function store(ctx: Context) {
   const text = message.text ?? message.caption;
   if (!text || /^\/[\w]+(?:@\w+)?(?:\s|$)/.test(text)) {
     if (ctx.editedMessage) await deleteMessage(message.chat.id, message.message_id);
-    // Commands still count as human activity for cancelling unanswered-question waits.
-    if (ctx.message) await cancelPendingAutoAnswersForActivity(ctx).catch(() => {});
     return;
   }
   const author = message.sender_chat?.title ??
@@ -274,7 +280,6 @@ async function store(ctx: Context) {
     sent_at: new Date(message.date * 1000),
   });
   if (ctx.message) {
-    await cancelPendingAutoAnswersForActivity(ctx).catch(() => {});
     if (await maybeHandleMention(ctx)) return;
     await maybeEnqueueAutoAnswer(ctx);
     await maybeRepostVideo(ctx);

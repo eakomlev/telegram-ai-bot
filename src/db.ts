@@ -69,8 +69,10 @@ export async function initializeDatabase() {
       due_at TIMESTAMPTZ NOT NULL,
       status TEXT NOT NULL,
       claimed_until TIMESTAMPTZ NULL,
+      answer_text TEXT NULL,
       PRIMARY KEY (chat_id, message_id)
     );
+    ALTER TABLE pending_auto_answers ADD COLUMN IF NOT EXISTS answer_text TEXT NULL;
     CREATE INDEX IF NOT EXISTS pending_auto_answers_due
       ON pending_auto_answers (due_at)
       WHERE status = 'pending';
@@ -455,6 +457,7 @@ export type PendingAutoAnswer = {
   dueAt: Date;
   status: PendingAutoAnswerStatus;
   claimedUntil: Date | null;
+  answerText: string | null;
 };
 
 type PendingAutoAnswerRow = {
@@ -468,6 +471,7 @@ type PendingAutoAnswerRow = {
   due_at: Date;
   status: string;
   claimed_until: Date | null;
+  answer_text: string | null;
 };
 
 function mapPendingAutoAnswer(row: PendingAutoAnswerRow): PendingAutoAnswer {
@@ -482,8 +486,14 @@ function mapPendingAutoAnswer(row: PendingAutoAnswerRow): PendingAutoAnswer {
     dueAt: new Date(row.due_at),
     status: row.status as PendingAutoAnswerStatus,
     claimedUntil: row.claimed_until ? new Date(row.claimed_until) : null,
+    answerText: row.answer_text ?? null,
   };
 }
+
+const PENDING_AUTO_ANSWER_RETURNING = `
+  chat_id::text AS chat_id, message_id, message_thread_id, author, question_text,
+  asker_user_id::text AS asker_user_id, created_at, due_at, status, claimed_until, answer_text
+`;
 
 export async function enqueuePendingAutoAnswer(row: {
   chatId: number;
@@ -517,8 +527,7 @@ export async function enqueuePendingAutoAnswer(row: {
 
 export async function listDuePendingAutoAnswers(now: Date, limit = 50): Promise<PendingAutoAnswer[]> {
   const result = await pool.query<PendingAutoAnswerRow>(
-    `SELECT chat_id::text AS chat_id, message_id, message_thread_id, author, question_text,
-            asker_user_id::text AS asker_user_id, created_at, due_at, status, claimed_until
+    `SELECT ${PENDING_AUTO_ANSWER_RETURNING}
      FROM pending_auto_answers
      WHERE due_at <= $1::timestamptz
        AND (
@@ -548,8 +557,7 @@ export async function claimPendingAutoAnswer(
          status = 'pending'
          OR (status = 'claimed' AND claimed_until IS NOT NULL AND claimed_until <= $4::timestamptz)
        )
-     RETURNING chat_id::text AS chat_id, message_id, message_thread_id, author, question_text,
-               asker_user_id::text AS asker_user_id, created_at, due_at, status, claimed_until`,
+     RETURNING ${PENDING_AUTO_ANSWER_RETURNING}`,
     [String(chatId), messageId, leaseUntil, now],
   );
   const row = result.rows[0];
@@ -569,13 +577,91 @@ export async function markPendingAutoAnswerStatus(
   );
 }
 
-/** True when the row is still claimed (not cancelled/answered while OpenAI ran). */
-export async function isPendingAutoAnswerStillClaimed(chatId: number, messageId: number): Promise<boolean> {
+/** Persist model output while this claim lease still owns the row. */
+export async function persistPendingAutoAnswerText(
+  chatId: number,
+  messageId: number,
+  claimedUntil: Date,
+  answerText: string,
+): Promise<boolean> {
   const result = await pool.query(
-    `SELECT 1 FROM pending_auto_answers
-     WHERE chat_id = $1 AND message_id = $2 AND status = 'claimed'
-     LIMIT 1`,
+    `UPDATE pending_auto_answers
+     SET answer_text = $4
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND status = 'claimed'
+       AND claimed_until = $3::timestamptz`,
+    [String(chatId), messageId, claimedUntil, answerText],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Atomically finish claim → answered before Telegram send, bound to this claim lease.
+ * Returns the stored answer when this worker still owns the row.
+ */
+export async function markPendingAutoAnswerReadyToSend(
+  chatId: number,
+  messageId: number,
+  claimedUntil: Date,
+): Promise<string | undefined> {
+  const result = await pool.query<{ answer_text: string }>(
+    `UPDATE pending_auto_answers
+     SET status = 'answered', claimed_until = NULL
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND status = 'claimed'
+       AND claimed_until = $3::timestamptz
+       AND answer_text IS NOT NULL
+     RETURNING answer_text`,
+    [String(chatId), messageId, claimedUntil],
+  );
+  return result.rows[0]?.answer_text;
+}
+
+/** After a failed send that already flipped to answered, re-queue for send-only retry. */
+export async function reclaimAnsweredAutoAnswerForSendRetry(
+  chatId: number,
+  messageId: number,
+  leaseUntil: Date,
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = 'claimed', claimed_until = $3::timestamptz
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND status = 'answered'
+       AND answer_text IS NOT NULL`,
+    [String(chatId), messageId, leaseUntil],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Fail-closed after permanent delivery error once the row was marked answered for send. */
+export async function markAnsweredAutoAnswerFailed(chatId: number, messageId: number) {
+  await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = 'failed', claimed_until = NULL
+     WHERE chat_id = $1 AND message_id = $2 AND status = 'answered'`,
     [String(chatId), messageId],
+  );
+}
+
+/** Fail/cancel while still holding this specific claim lease. */
+export async function markPendingAutoAnswerStatusWithClaim(
+  chatId: number,
+  messageId: number,
+  claimedUntil: Date,
+  status: 'cancelled' | 'failed',
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE pending_auto_answers
+     SET status = $4, claimed_until = NULL
+     WHERE chat_id = $1
+       AND message_id = $2
+       AND status = 'claimed'
+       AND claimed_until = $3::timestamptz`,
+    [String(chatId), messageId, claimedUntil, status],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -765,6 +851,12 @@ export async function cleanup() {
   await pool.query(
     `DELETE FROM chat_member_snapshots WHERE captured_on < (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - ($1::int * interval '1 day')`,
     [config.USAGE_RETENTION_DAYS],
+  );
+  await pool.query(
+    `DELETE FROM pending_auto_answers
+     WHERE status IN ('answered', 'cancelled', 'failed')
+       AND created_at < now() - ($1::int * interval '1 day')`,
+    [config.RETENTION_DAYS],
   );
 }
 
