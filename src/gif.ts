@@ -84,7 +84,7 @@ export async function runGifReaction(ctx: Context) {
     }).catch(() => console.error('OpenAI usage record failed', { chatId, kind: 'gif' }));
 
     let urls = await searchGiphyAnimations(reaction.query);
-    if (!urls.length) urls = await searchGiphyAnimations('funny reaction');
+    if (!urls.length) urls = await searchGiphyAnimations('смешная реакция');
     const animationUrl = pickRandomUrl(urls);
     if (!animationUrl) {
       await ctx.api.editMessageText(chatId, status.message_id, `${reaction.caption}\n\n(GIF не нашлась, осталась только подпись.)`);
