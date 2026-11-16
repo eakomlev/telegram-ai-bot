@@ -49,7 +49,7 @@ export async function searchGiphyAnimations(query: string, limit = 8): Promise<s
     q: query,
     limit: String(Math.min(25, Math.max(1, limit))),
     rating: 'pg-13',
-    lang: 'ru',
+    lang: 'en',
     bundle: 'messaging_non_clips',
   });
   const response = await fetch(`https://api.giphy.com/v1/gifs/search?${params}`, {
