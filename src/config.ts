@@ -84,6 +84,10 @@ const schema = z.object({
   MENTION_VISION_ENABLED: bool.default('true'),
   MENTION_MAX_INPUT_IMAGES: integer(4, 0, 8),
   MENTION_MAX_INPUT_IMAGE_MB: integer(5, 1, 20),
+  /** Preceding lines before a quoted reply when @mentioned; 0 = quote+request only. */
+  MENTION_CONTEXT_MAX_MESSAGES: integer(6, 0, 100),
+  MENTION_CONTEXT_LOOKBACK_MINUTES: integer(10, 1, 1440),
+  MENTION_CONTEXT_MAX_CHARS: integer(500, 0, 50000),
   NEWS_ENABLED: bool.default('true'),
   NEWS_MAX_OUTPUT_TOKENS: integer(700, 64, 4000),
   NEWS_TICK_INTERVAL_MS: integer(60000, 5000, 3600000),

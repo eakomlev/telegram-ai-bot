@@ -447,7 +447,7 @@ export async function replyToUnansweredQuestion(
   questionText: string,
   author: string,
   sarcasmLevel = 0,
-  contextMessages: AutoAnswerContextMessage[] = [],
+  contextMessages: ChatContextMessage[] = [],
 ): Promise<{ text: string; usage: AiUsage }> {
   const prompt = questionText.trim().slice(0, config.AUTO_ANSWER_MAX_INPUT_CHARS);
   if (!prompt) throw new Error('Empty auto-answer question');
