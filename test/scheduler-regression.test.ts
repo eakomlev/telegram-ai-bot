@@ -6,6 +6,11 @@ import { config } from '../src/config.js';
 import { cancelAutoAnswerForEdit } from '../src/auto-answer.js';
 import { runAutoAnswerSchedulerTick, stopAutoAnswerScheduler } from '../src/auto-answer-scheduler.js';
 import { runNewsSchedulerTick, stopNewsScheduler } from '../src/news-scheduler.js';
+import {
+  runPersonalizationSchedulerTick,
+  stopPersonalizationScheduler,
+} from '../src/personalization-scheduler.js';
+import { zonedMoscowTime } from '../src/moscow-time.js';
 import type { Message } from 'grammy/types';
 
 test('editing cancels only the original question even after removing its caption', async () => {
@@ -22,16 +27,23 @@ test('both schedulers coalesce overlapping ticks and stop waits for work', async
   const originalQuery = pool.query;
   const oldAuto = config.AUTO_ANSWER_ENABLED;
   const oldNews = config.NEWS_ENABLED;
+  const oldPersonalization = config.PERSONALIZATION_ENABLED;
   config.AUTO_ANSWER_ENABLED = 'true';
   config.NEWS_ENABLED = 'true';
+  config.PERSONALIZATION_ENABLED = 'true';
+  const personalizationNow = zonedMoscowTime(2024, 6, 1, 4, 0);
   try {
-    for (const [run, stop] of [[runAutoAnswerSchedulerTick, stopAutoAnswerScheduler], [runNewsSchedulerTick, stopNewsScheduler]] as const) {
+    for (const [run, stop, now] of [
+      [runAutoAnswerSchedulerTick, stopAutoAnswerScheduler, undefined],
+      [runNewsSchedulerTick, stopNewsScheduler, undefined],
+      [runPersonalizationSchedulerTick, stopPersonalizationScheduler, personalizationNow],
+    ] as const) {
       let queries = 0;
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
       pool.query = (async () => { queries++; await gate; return { rows: [] }; }) as any;
-      const first = run({} as Api);
-      const second = run({} as Api);
+      const first = now ? run({} as Api, now) : run({} as Api);
+      const second = now ? run({} as Api, now) : run({} as Api);
       assert.equal(first, second);
       assert.equal(queries, 1);
       let stopped = false;
@@ -46,6 +58,7 @@ test('both schedulers coalesce overlapping ticks and stop waits for work', async
     pool.query = originalQuery;
     config.AUTO_ANSWER_ENABLED = oldAuto;
     config.NEWS_ENABLED = oldNews;
+    config.PERSONALIZATION_ENABLED = oldPersonalization;
   }
 });
 

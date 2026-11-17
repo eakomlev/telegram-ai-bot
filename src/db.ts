@@ -25,9 +25,13 @@ export async function initializeDatabase() {
     );
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_thread_id INTEGER NULL;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS author_user_id BIGINT NULL;
     CREATE INDEX IF NOT EXISTS messages_chat_time ON messages (chat_id, sent_at DESC, message_id DESC);
     CREATE INDEX IF NOT EXISTS messages_chat_thread_time
       ON messages (chat_id, message_thread_id, sent_at DESC, message_id DESC);
+    CREATE INDEX IF NOT EXISTS messages_chat_author_time
+      ON messages (chat_id, author_user_id, sent_at DESC)
+      WHERE is_bot = false AND author_user_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS summary_requests (
       chat_id BIGINT PRIMARY KEY,
       requested_at TIMESTAMPTZ NOT NULL
@@ -64,8 +68,12 @@ export async function initializeDatabase() {
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_next_run_at TIMESTAMPTZ NULL;
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_last_sent_on DATE NULL;
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS auto_answer_enabled BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS personalization_enabled BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS personalization_last_run_on DATE NULL;
     CREATE INDEX IF NOT EXISTS chat_settings_news_due ON chat_settings (news_next_run_at)
       WHERE news_enabled;
+    CREATE INDEX IF NOT EXISTS chat_settings_personalization_due ON chat_settings (personalization_last_run_on)
+      WHERE personalization_enabled;
     CREATE TABLE IF NOT EXISTS pending_auto_answers (
       chat_id BIGINT NOT NULL,
       message_id INTEGER NOT NULL,
@@ -103,10 +111,25 @@ export async function initializeDatabase() {
       PRIMARY KEY (chat_id, captured_on)
     );
     CREATE INDEX IF NOT EXISTS chat_member_snapshots_day ON chat_member_snapshots (captured_on DESC);
+    CREATE TABLE IF NOT EXISTS chat_participants (
+      chat_id BIGINT NOT NULL,
+      user_id BIGINT NOT NULL,
+      username TEXT NULL,
+      display_name TEXT NOT NULL,
+      characteristic TEXT NULL,
+      characteristic_updated_at TIMESTAMPTZ NULL,
+      characteristic_source_until TIMESTAMPTZ NULL,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (chat_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS chat_participants_chat_seen
+      ON chat_participants (chat_id, last_seen_at DESC);
   `);
 }
 
-export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer';
+export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer' | 'personalization';
 
 export type OpenAiUsageRecord = {
   kind: OpenAiUsageKind;
@@ -124,6 +147,7 @@ export type OpenAiUsageTotals = {
   gifRequests: number;
   newsRequests: number;
   autoAnswerRequests: number;
+  personalizationRequests: number;
   promptTokens: number;
   completionTokens: number;
   imageCount: number;
@@ -137,6 +161,7 @@ const emptyUsageTotals = (): OpenAiUsageTotals => ({
   gifRequests: 0,
   newsRequests: 0,
   autoAnswerRequests: 0,
+  personalizationRequests: 0,
   promptTokens: 0,
   completionTokens: 0,
   imageCount: 0,
@@ -167,6 +192,7 @@ function mapUsageTotals(row: {
   gif_requests: string;
   news_requests: string;
   auto_answer_requests: string;
+  personalization_requests: string;
   prompt_tokens: string;
   completion_tokens: string;
   image_count: string;
@@ -180,6 +206,7 @@ function mapUsageTotals(row: {
     gifRequests: Number(row.gif_requests) || 0,
     newsRequests: Number(row.news_requests) || 0,
     autoAnswerRequests: Number(row.auto_answer_requests) || 0,
+    personalizationRequests: Number(row.personalization_requests) || 0,
     promptTokens: Number(row.prompt_tokens) || 0,
     completionTokens: Number(row.completion_tokens) || 0,
     imageCount: Number(row.image_count) || 0,
@@ -194,25 +221,29 @@ const USAGE_TOTALS_SELECT = `
   COUNT(*) FILTER (WHERE kind = 'gif')::text AS gif_requests,
   COUNT(*) FILTER (WHERE kind = 'news')::text AS news_requests,
   COUNT(*) FILTER (WHERE kind = 'auto_answer')::text AS auto_answer_requests,
+  COUNT(*) FILTER (WHERE kind = 'personalization')::text AS personalization_requests,
   COALESCE(SUM(prompt_tokens), 0)::text AS prompt_tokens,
   COALESCE(SUM(completion_tokens), 0)::text AS completion_tokens,
   COALESCE(SUM(image_count), 0)::text AS image_count,
   COALESCE(SUM(estimated_cost_usd), 0)::text AS estimated_cost_usd
 `;
 
+type UsageTotalsRow = {
+  requests: string;
+  summary_requests: string;
+  mention_requests: string;
+  gif_requests: string;
+  news_requests: string;
+  auto_answer_requests: string;
+  personalization_requests: string;
+  prompt_tokens: string;
+  completion_tokens: string;
+  image_count: string;
+  estimated_cost_usd: string;
+};
+
 export async function getOpenAiUsageTotals(chatId: number, since?: Date): Promise<OpenAiUsageTotals> {
-  const result = await pool.query<{
-    requests: string;
-    summary_requests: string;
-    mention_requests: string;
-    gif_requests: string;
-    news_requests: string;
-    auto_answer_requests: string;
-    prompt_tokens: string;
-    completion_tokens: string;
-    image_count: string;
-    estimated_cost_usd: string;
-  }>(
+  const result = await pool.query<UsageTotalsRow>(
     `SELECT ${USAGE_TOTALS_SELECT}
      FROM openai_usage
      WHERE chat_id = $1
@@ -223,18 +254,7 @@ export async function getOpenAiUsageTotals(chatId: number, since?: Date): Promis
 }
 
 export async function getGlobalOpenAiUsageTotals(since?: Date): Promise<OpenAiUsageTotals> {
-  const result = await pool.query<{
-    requests: string;
-    summary_requests: string;
-    mention_requests: string;
-    gif_requests: string;
-    news_requests: string;
-    auto_answer_requests: string;
-    prompt_tokens: string;
-    completion_tokens: string;
-    image_count: string;
-    estimated_cost_usd: string;
-  }>(
+  const result = await pool.query<UsageTotalsRow>(
     `SELECT ${USAGE_TOTALS_SELECT}
      FROM openai_usage
      WHERE ($1::timestamptz IS NULL OR created_at >= $1)`,
@@ -271,19 +291,7 @@ export async function countNewOpenAiUsageChats(since: Date): Promise<number> {
 }
 
 export async function getOpenAiUsageByChat(since?: Date, limit = 30): Promise<OpenAiUsageChatRow[]> {
-  const result = await pool.query<{
-    chat_id: string;
-    requests: string;
-    summary_requests: string;
-    mention_requests: string;
-    gif_requests: string;
-    news_requests: string;
-    auto_answer_requests: string;
-    prompt_tokens: string;
-    completion_tokens: string;
-    image_count: string;
-    estimated_cost_usd: string;
-  }>(
+  const result = await pool.query<UsageTotalsRow & { chat_id: string }>(
     `SELECT chat_id::text AS chat_id, ${USAGE_TOTALS_SELECT}
      FROM openai_usage
      WHERE ($1::timestamptz IS NULL OR created_at >= $1)
@@ -312,6 +320,9 @@ export type ChatSettingsRow = {
   news_next_run_at: Date | string | null;
   news_last_sent_on: string | null;
   auto_answer_enabled: boolean;
+  personalization_enabled: boolean;
+  /** Present on reads; upsert ignores this field (scheduler owns last_run_on). */
+  personalization_last_run_on?: string | null;
 };
 
 export type DueNewsChat = {
@@ -323,7 +334,7 @@ export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRo
   const result = await pool.query<ChatSettingsRow>(
     `SELECT summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
             sarcasm_level, response_tone, mention_enabled, news_enabled, news_spheres, news_next_run_at, news_last_sent_on,
-            auto_answer_enabled
+            auto_answer_enabled, personalization_enabled, personalization_last_run_on
      FROM chat_settings WHERE chat_id = $1`,
     [String(chatId)],
   );
@@ -334,8 +345,9 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
   await pool.query(
     `INSERT INTO chat_settings (
       chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
-      sarcasm_level, response_tone, mention_enabled, news_enabled, news_spheres, auto_answer_enabled, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+      sarcasm_level, response_tone, mention_enabled, news_enabled, news_spheres, auto_answer_enabled,
+      personalization_enabled, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
     ON CONFLICT (chat_id) DO UPDATE SET
       summary_admin_only = EXCLUDED.summary_admin_only,
       default_message_count = EXCLUDED.default_message_count,
@@ -348,6 +360,7 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       news_enabled = EXCLUDED.news_enabled,
       news_spheres = EXCLUDED.news_spheres,
       auto_answer_enabled = EXCLUDED.auto_answer_enabled,
+      personalization_enabled = EXCLUDED.personalization_enabled,
       updated_at = now()`,
     [
       String(chatId),
@@ -362,6 +375,7 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       row.news_enabled,
       row.news_spheres,
       row.auto_answer_enabled,
+      row.personalization_enabled,
     ],
   );
 }
@@ -453,6 +467,27 @@ export async function disableNewsForChat(chatId: number) {
 
 export async function deleteChatSettings(chatId: number) {
   await pool.query('DELETE FROM chat_settings WHERE chat_id = $1', [String(chatId)]);
+}
+
+/** Insert default settings if missing so personalization (default ON) can be scheduled. */
+export async function ensureChatSettingsDefaults(chatId: number) {
+  await pool.query(
+    `INSERT INTO chat_settings (
+      chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled,
+      media_cooldown_seconds, sarcasm_level, response_tone, mention_enabled, news_enabled,
+      news_spheres, auto_answer_enabled, personalization_enabled, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'gentleman', true, false, '{}', false, true, now())
+    ON CONFLICT (chat_id) DO NOTHING`,
+    [
+      String(chatId),
+      config.SUMMARY_ADMIN_ONLY === 'true',
+      config.DEFAULT_MESSAGE_COUNT,
+      config.VIDEO_ENABLED === 'true',
+      config.GALLERY_ENABLED === 'true',
+      config.MEDIA_COOLDOWN_SECONDS ?? config.VIDEO_COOLDOWN_SECONDS,
+      config.SUMMARY_SARCASM_PERCENT,
+    ],
+  );
 }
 
 export type PendingAutoAnswerStatus =
@@ -824,13 +859,14 @@ export async function deleteVideoCache(sourceUrl: string) {
 }
 
 export async function saveMessage(chatId: number, message: ChatMessage) {
-  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at, message_thread_id, is_bot)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at, message_thread_id, is_bot, author_user_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (chat_id, message_id) DO UPDATE SET
       author = EXCLUDED.author,
       text = EXCLUDED.text,
       message_thread_id = EXCLUDED.message_thread_id,
-      is_bot = EXCLUDED.is_bot`,
+      is_bot = EXCLUDED.is_bot,
+      author_user_id = EXCLUDED.author_user_id`,
   [
     String(chatId),
     message.message_id,
@@ -839,6 +875,7 @@ export async function saveMessage(chatId: number, message: ChatMessage) {
     message.sent_at,
     message.message_thread_id ?? null,
     message.is_bot ?? false,
+    message.author_user_id ?? null,
   ]);
 }
 
@@ -975,6 +1012,220 @@ export async function getLatestChatMemberCounts(): Promise<Map<number, number>> 
      ORDER BY chat_id, captured_on DESC`,
   );
   return new Map(result.rows.map((row) => [Number(row.chat_id), row.member_count]));
+}
+
+/** Latest known member count for one chat, or undefined if none. */
+export async function getLatestMemberCount(chatId: number): Promise<number | undefined> {
+  const result = await pool.query<{ member_count: number }>(
+    `SELECT member_count
+     FROM chat_member_snapshots
+     WHERE chat_id = $1
+     ORDER BY captured_on DESC
+     LIMIT 1`,
+    [String(chatId)],
+  );
+  const count = result.rows[0]?.member_count;
+  return typeof count === 'number' ? count : undefined;
+}
+
+export type ChatParticipantRow = {
+  chatId: number;
+  userId: number;
+  username: string | null;
+  displayName: string;
+  characteristic: string | null;
+  characteristicUpdatedAt: Date | null;
+  characteristicSourceUntil: Date | null;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  updatedAt: Date;
+};
+
+type ChatParticipantDbRow = {
+  chat_id: string;
+  user_id: string;
+  username: string | null;
+  display_name: string;
+  characteristic: string | null;
+  characteristic_updated_at: Date | null;
+  characteristic_source_until: Date | null;
+  first_seen_at: Date;
+  last_seen_at: Date;
+  updated_at: Date;
+};
+
+function mapChatParticipant(row: ChatParticipantDbRow): ChatParticipantRow {
+  return {
+    chatId: Number(row.chat_id),
+    userId: Number(row.user_id),
+    username: row.username,
+    displayName: row.display_name,
+    characteristic: row.characteristic,
+    characteristicUpdatedAt: row.characteristic_updated_at,
+    characteristicSourceUntil: row.characteristic_source_until,
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function upsertChatParticipant(params: {
+  chatId: number;
+  userId: number;
+  username?: string | null;
+  displayName: string;
+  seenAt?: Date;
+}) {
+  const seenAt = params.seenAt ?? new Date();
+  await pool.query(
+    `INSERT INTO chat_participants (
+      chat_id, user_id, username, display_name, first_seen_at, last_seen_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $5, $5)
+    ON CONFLICT (chat_id, user_id) DO UPDATE SET
+      username = COALESCE(EXCLUDED.username, chat_participants.username),
+      display_name = EXCLUDED.display_name,
+      last_seen_at = GREATEST(chat_participants.last_seen_at, EXCLUDED.last_seen_at),
+      updated_at = now()`,
+    [
+      String(params.chatId),
+      String(params.userId),
+      params.username ?? null,
+      params.displayName,
+      seenAt,
+    ],
+  );
+}
+
+export async function getChatParticipant(
+  chatId: number,
+  userId: number,
+): Promise<ChatParticipantRow | undefined> {
+  const result = await pool.query<ChatParticipantDbRow>(
+    `SELECT chat_id::text AS chat_id, user_id::text AS user_id, username, display_name, characteristic,
+            characteristic_updated_at, characteristic_source_until, first_seen_at, last_seen_at, updated_at
+     FROM chat_participants
+     WHERE chat_id = $1 AND user_id = $2`,
+    [String(chatId), String(userId)],
+  );
+  const row = result.rows[0];
+  return row ? mapChatParticipant(row) : undefined;
+}
+
+export async function listChatParticipants(
+  chatId: number,
+  limit = config.PERSONALIZATION_MAX_USERS_PER_CHAT,
+): Promise<ChatParticipantRow[]> {
+  const result = await pool.query<ChatParticipantDbRow>(
+    `SELECT chat_id::text AS chat_id, user_id::text AS user_id, username, display_name, characteristic,
+            characteristic_updated_at, characteristic_source_until, first_seen_at, last_seen_at, updated_at
+     FROM chat_participants
+     WHERE chat_id = $1
+     ORDER BY last_seen_at DESC
+     LIMIT $2`,
+    [String(chatId), limit],
+  );
+  return result.rows.map(mapChatParticipant);
+}
+
+export async function updateParticipantCharacteristic(params: {
+  chatId: number;
+  userId: number;
+  characteristic: string;
+  sourceUntil: Date;
+}) {
+  await pool.query(
+    `UPDATE chat_participants
+     SET characteristic = $3,
+         characteristic_updated_at = now(),
+         characteristic_source_until = $4,
+         updated_at = now()
+     WHERE chat_id = $1 AND user_id = $2`,
+    [String(params.chatId), String(params.userId), params.characteristic, params.sourceUntil],
+  );
+}
+
+export type PersonalizationMessage = {
+  authorUserId: number;
+  displayName: string;
+  text: string;
+  sentAt: Date;
+};
+
+/** Newest-first rows → chronological order for transcripts. */
+export function chronologicalFromNewestFirst<T>(rows: T[]): T[] {
+  return rows.slice().reverse();
+}
+
+/** Non-bot messages with author_user_id in [since, until]: latest N, returned chronological. */
+export async function listMessagesForPersonalization(params: {
+  chatId: number;
+  since: Date;
+  until: Date;
+  maxMessages?: number;
+}): Promise<PersonalizationMessage[]> {
+  const maxMessages = params.maxMessages ?? config.PERSONALIZATION_MAX_MESSAGES;
+  const result = await pool.query<{
+    author_user_id: string;
+    author: string;
+    text: string;
+    sent_at: Date;
+  }>(
+    `SELECT author_user_id::text AS author_user_id, author, text, sent_at
+     FROM messages
+     WHERE chat_id = $1
+       AND is_bot = false
+       AND author_user_id IS NOT NULL
+       AND sent_at >= $2::timestamptz
+       AND sent_at < $3::timestamptz
+     ORDER BY sent_at DESC, message_id DESC
+     LIMIT $4`,
+    [String(params.chatId), params.since, params.until, maxMessages],
+  );
+  return chronologicalFromNewestFirst(result.rows).map((row) => ({
+    authorUserId: Number(row.author_user_id),
+    displayName: row.author,
+    text: row.text,
+    sentAt: row.sent_at,
+  }));
+}
+
+export async function listDuePersonalizationChats(moscowDate: string): Promise<number[]> {
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT chat_id::text AS chat_id
+     FROM chat_settings
+     WHERE personalization_enabled = true
+       AND (personalization_last_run_on IS NULL OR personalization_last_run_on < $1::date)`,
+    [moscowDate],
+  );
+  return result.rows.map((row) => Number(row.chat_id));
+}
+
+/**
+ * Atomically claim today's personalization run by setting last_run_on.
+ * Returns true if this process owns the run.
+ */
+export async function claimPersonalizationRun(chatId: number, moscowDate: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE chat_settings
+     SET personalization_last_run_on = $2::date, updated_at = now()
+     WHERE chat_id = $1
+       AND personalization_enabled = true
+       AND (personalization_last_run_on IS NULL OR personalization_last_run_on < $2::date)
+     RETURNING chat_id`,
+    [String(chatId), moscowDate],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+/** Clear today's claim so a failed run can retry on the next tick. */
+export async function clearPersonalizationRunClaim(chatId: number, moscowDate: string) {
+  await pool.query(
+    `UPDATE chat_settings
+     SET personalization_last_run_on = NULL, updated_at = now()
+     WHERE chat_id = $1
+       AND personalization_last_run_on = $2::date`,
+    [String(chatId), moscowDate],
+  );
 }
 
 export async function getTotalLatestChatMembers(): Promise<number | undefined> {

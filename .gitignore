@@ -3,6 +3,7 @@
 .env.*.local
 node_modules/
 dist/
+data/
 *.log
 .idea/
 .DS_Store

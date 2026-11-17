@@ -10,6 +10,7 @@ import {
   claimSummary,
   cleanup,
   deleteMessage,
+  ensureChatSettingsDefaults,
   getGlobalOpenAiUsageTotals,
   getOpenAiUsageByChat,
   getOpenAiUsageTotals,
@@ -18,6 +19,7 @@ import {
   getLatestChatMemberCounts,
   getTotalLatestChatMembers,
   recordOpenAiUsage,
+  upsertChatParticipant,
 } from './db.js';
 import { summarize, type SummaryStyle } from './ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary.js';
@@ -33,6 +35,10 @@ import { maybeRepostVideo } from './video.js';
 import { maybeRepostGallery } from './gallery.js';
 import { stopMediaJobs } from './media-jobs.js';
 import { startNewsScheduler, stopNewsScheduler } from './news-scheduler.js';
+import {
+  startPersonalizationScheduler,
+  stopPersonalizationScheduler,
+} from './personalization-scheduler.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -55,6 +61,8 @@ const help = `Я сохраняю текстовые сообщения и по�
 В /settings можно включить ежедневную интересную новость (случайное время 10:00–21:00 по Москве) по выбранным сферам.
 
 Там же можно включить автоответ на вопросы без ответа: если общий вопрос в чат (без @упоминаний и без ответа-цитаты) останется без реакции участников ~5 минут, бот мягко ответит через OpenAI (с коротким окном недавних сообщений до вопроса как контекстом).
+
+Персонализация участников по умолчанию включена для небольших чатов (меньше 20 участников): раз в сутки бот анализирует переписку через OpenAI и учитывает короткие внутренние характеристики в ответах на @упоминания и в автоответах. В чатах на 20+ участников персонализация не работает. Отдельного профиля «обо мне» нет.
 
 Упомяните меня (@бот) в сообщении или ответьте на моё сообщение — отвечу через OpenAI. Текст и картинки из сообщения и из цитаты учитываю как контекст, плюс короткое окно недавних сообщений до запроса/цитаты; в ответе тоже могу прислать картинку.
 Если в запросе есть слова вроде «мем», «демотиватор», «drake» — сделаю мем-картинку.
@@ -150,6 +158,7 @@ bot.command('stats', async (ctx) => {
     gifRequests: 0,
     newsRequests: 0,
     autoAnswerRequests: 0,
+    personalizationRequests: 0,
     promptTokens: 0,
     completionTokens: 0,
     imageCount: 0,
@@ -173,10 +182,11 @@ bot.command('stats', async (ctx) => {
 });
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст и подписи участников, а также текст и подписи исходящих ответов бота на @упоминания и автоответы (сами изображения не сохраняются; не саммари, стихи, GIF, новости и служебные сообщения), ` +
-  `отображаемое имя автора, время, ID сообщений и (для тем форума) ID темы в Postgres на ${config.RETENTION_DAYS} дней. ` +
+  `отображаемое имя автора, ID пользователя (для обычных аккаунтов), время, ID сообщений и (для тем форума) ID темы в Postgres на ${config.RETENTION_DAYS} дней. ` +
   `Учёт токенов и оценочных расходов OpenAI, а также ежедневные снимки числа участников групп, хранятся ${config.USAGE_RETENTION_DAYS} дней. ` +
-  'При /summary, /gif, ежедневных новостях, @упоминаниях и (если включено в /settings) автоответах на вопросы без ответа данные уходят в OpenAI API; ' +
+  'При /summary, /gif, ежедневных новостях, @упоминаниях, (если включено в /settings) автоответах на вопросы без ответа и при ежедневной персонализации участников данные уходят в OpenAI API; ' +
   'для автоответа и @упоминаний модель также может получить небольшое окно недавних сообщений до вопроса/запроса (включая ранее сохранённые текст и подписи ответов бота; та же тема форума или чат целиком). ' +
+  'Персонализация (по умолчанию вкл. в /settings; только чаты меньше 20 участников): раз в сутки бот анализирует недавнюю переписку и сохраняет внутренние характеристики участников для более уместных ответов на @упоминания и автоответы; отдельного пользовательского профиля нет. ' +
   'Ответы /summary, /verse, /gif и новости в историю переписки для контекста не сохраняются. ' +
   'Для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
   'Ссылки на видео и посты с картинками передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
@@ -278,13 +288,34 @@ async function store(ctx: Context) {
   }
   const author = message.sender_chat?.title ??
     [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') ?? 'Участник';
+  const displayName = author || 'Участник';
+  const isAnonymousSenderChat = Boolean(message.sender_chat);
+  const isHumanUser = Boolean(message.from && !message.from.is_bot && !isAnonymousSenderChat);
+  const authorUserId = isHumanUser ? message.from!.id : null;
+  const sentAt = new Date(message.date * 1000);
   await saveMessage(message.chat.id, {
     message_id: message.message_id,
-    author: author || 'Участник',
+    author: displayName,
     text,
-    sent_at: new Date(message.date * 1000),
+    sent_at: sentAt,
     message_thread_id: message.message_thread_id ?? null,
+    author_user_id: authorUserId,
   });
+  if (isHumanUser && authorUserId != null) {
+    await ensureChatSettingsDefaults(message.chat.id).catch(() =>
+      console.error('Ensure chat settings failed', { chatId: message.chat.id }),
+    );
+    await upsertChatParticipant({
+      chatId: message.chat.id,
+      userId: authorUserId,
+      username: message.from?.username ?? null,
+      displayName,
+      seenAt: sentAt,
+    }).catch(() => console.error('Chat participant upsert failed', {
+      chatId: message.chat.id,
+      userId: authorUserId,
+    }));
+  }
   if (ctx.message) {
     if (await maybeHandleMention(ctx)) return;
     await maybeEnqueueAutoAnswer(ctx);
@@ -299,7 +330,13 @@ async function shutdown() {
   if (stopping) return;
   stopping = true;
   if (cleanupTimer) clearInterval(cleanupTimer);
-  const draining = Promise.allSettled([stopNewsScheduler(), stopAutoAnswerScheduler(), aiJobs.stop(), stopMediaJobs()]);
+  const draining = Promise.allSettled([
+    stopNewsScheduler(),
+    stopAutoAnswerScheduler(),
+    stopPersonalizationScheduler(),
+    aiJobs.stop(),
+    stopMediaJobs(),
+  ]);
   try {
     if (bot.isRunning()) await bot.stop();
   } finally {
@@ -323,6 +360,7 @@ try {
   if (!me.username) throw new Error('Bot username is required for @mentions');
   setBotIdentity(me.id, me.username);
   startAutoAnswerScheduler(bot.api);
+  startPersonalizationScheduler(bot.api);
   const groupCommands = [
     { command: 'summary', description: 'Саммари: N, 24h или 7d' },
     { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
