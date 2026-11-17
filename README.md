@@ -100,8 +100,9 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
 | `OPENAI_MODEL` | `gpt-6-sol` | Модель Chat Completions; для `gpt-6*` бот ставит `reasoning_effort=none` (нужно для tool calling в @упоминаниях) |
+| `OPENAI_NEWS_MODEL` | пусто | Опциональная модель только для ежедневных новостей; пусто — тот же `OPENAI_MODEL` |
 | `OPENAI_TIMEOUT_MS` / `OPENAI_MAX_RETRIES` | `90000` / `1` | Таймаут и число повторов OpenAI SDK |
-| `OPENAI_BASE_URL` | пусто | Опциональный совместимый endpoint |
+| `OPENAI_BASE_URL` | пусто | Опциональный совместимый endpoint; для новостей с веб-поиском прокси должен поддерживать `/v1/responses` и hosted `web_search` |
 | `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `2` / `10` | Оценка $ за 1M токенов для `/usage` |
 | `OPENAI_IMAGE_USD` | `0.011` | Оценка $ за одну сгенерированную картинку |
 | `USAGE_RETENTION_DAYS` | `90` | Срок хранения записей расходов OpenAI |
@@ -109,6 +110,9 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | `GIF_DEFAULT_MESSAGE_COUNT` / `GIF_MAX_MESSAGE_COUNT` | `40` / `80` | Сколько сообщений смотреть для GIF-реакции |
 | `NEWS_ENABLED` | `true` | Глобально включить ежедневные новости в группах с настройкой |
 | `NEWS_MAX_OUTPUT_TOKENS` / `NEWS_TICK_INTERVAL_MS` / `NEWS_RETRY_MINUTES` | `700` / `60000` / `20` | Лимит ответа, интервал опроса планировщика и мягкий повтор при сбое |
+| `NEWS_WEB_SEARCH` | `true` | Ежедневные новости через Responses API с hosted `web_search` (актуальные события; доп. стоимость). `false` — старый путь Chat Completions без веб-доступа |
+| `NEWS_SEARCH_CONTEXT_SIZE` | `medium` | Объём контекста веб-поиска: `low` / `medium` / `high` |
+| `NEWS_FORCE_WEB_SEARCH` | `true` | Принудительно требовать вызов `web_search` (`tool_choice: required`) |
 | `AUTO_ANSWER_ENABLED` | `true` | Глобальный переключатель автоответа; в группе всё равно нужно включить в `/settings` (по умолчанию выкл) |
 | `AUTO_ANSWER_DELAY_SECONDS` / `AUTO_ANSWER_TICK_INTERVAL_MS` | `300` / `15000` | Сколько ждать ответа людей и как часто опрашивать очередь |
 | `AUTO_ANSWER_CONTEXT_MAX_MESSAGES` / `AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES` / `AUTO_ANSWER_CONTEXT_MAX_CHARS` | `12` / `15` / `2500` | Окно предшествующих сообщений как контекст OpenAI при автоответе (`0` сообщений — только вопрос); пересечение лимитов по числу, времени и символам |

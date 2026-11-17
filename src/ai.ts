@@ -385,11 +385,13 @@ export function buildNewsSystemPrompt(sphereLabel: string) {
   return `Ты — весёлый коллега из досугового Telegram-чата. Раз в день кидаешь одну свежую интересную новость по теме «${sphereLabel}».
 
 Правила
+• Обязательно используй веб-поиск (web search), чтобы взять актуальную новость по текущим событиям, а не опирайся только на память модели.
 • Ровно одна новость: живой короткий рассказ, будто делишься за обедом, а не лента и не дайджест.
 • Пиши по-русски, обычным текстом. Не используй Markdown и HTML.
-• Бери только свежие новости примерно за последние 48 часов.
+• Предпочитай новости примерно за последние 24–48 часов относительно сегодняшней даты по Москве (она будет во входном сообщении).
 • Не выдумывай факты, цифры, цитаты, названия и ссылки. Не добавляй фейковые URL.
-• Если уверенности в факте нет — лучше сформулируй осторожнее или выбери другую известную тебе свежую новость по теме.
+• Можно указать ровно одну реальную ссылку на источник обычным текстом (полный URL без Markdown и HTML), если она есть в результатах поиска. Больше одной ссылки не ставь.
+• Если уверенности в факте нет — лучше сформулируй осторожнее или выбери другую подтверждённую свежую новость по теме.
 • Без кликбейта, политики ради политики, NSFW и токсичности.
 • Можно добавить лёгкую доброжелательную шутку в конце, но новость должна остаться понятной.
 • Начни с эмодзи и короткого заголовка, затем 2–5 предложений сути.
@@ -397,13 +399,83 @@ export function buildNewsSystemPrompt(sphereLabel: string) {
 Главный принцип: интересно, коротко и по делу — как сообщение друга в чат, а не как статья.`;
 }
 
-export async function generateInterestingNews(
+export function newsModel() {
+  const custom = config.OPENAI_NEWS_MODEL.trim();
+  return custom || config.OPENAI_MODEL;
+}
+
+export function buildNewsUserPrompt(sphereId: string, sphereLabelText: string, moscowDay: string) {
+  return (
+    `Сфера: ${sphereLabelText} (${sphereId}).\n` +
+    `Сегодня по Москве: ${moscowDay}.\n` +
+    'Найди через веб-поиск одну свежую интересную новость по этой сфере и расскажи о ней.'
+  );
+}
+
+export function buildNewsWebSearchTool() {
+  return {
+    type: 'web_search' as const,
+    search_context_size: config.NEWS_SEARCH_CONTEXT_SIZE,
+    user_location: {
+      type: 'approximate' as const,
+      country: 'RU',
+      timezone: 'Europe/Moscow',
+    },
+  };
+}
+
+export function responseHasWebSearchCall(output: ReadonlyArray<{ type?: string }> | undefined | null) {
+  return Array.isArray(output) && output.some((item) => item?.type === 'web_search_call');
+}
+
+export function mapResponsesUsage(
+  model: string,
+  usage?: { input_tokens?: number | null; output_tokens?: number | null } | null,
+): AiUsage {
+  return buildAiUsage({
+    model,
+    promptTokens: usage?.input_tokens ?? undefined,
+    completionTokens: usage?.output_tokens ?? undefined,
+  });
+}
+
+async function generateInterestingNewsWithWebSearch(
   sphereId: string,
   sphereLabelText: string,
+  moscowDay: string,
 ): Promise<{ text: string; usage: AiUsage }> {
-  const moscowDay = moscowDateString();
+  const model = newsModel();
+  const response = await client.responses.create({
+    model,
+    instructions: buildNewsSystemPrompt(sphereLabelText),
+    input: buildNewsUserPrompt(sphereId, sphereLabelText, moscowDay),
+    tools: [buildNewsWebSearchTool()],
+    ...(config.NEWS_FORCE_WEB_SEARCH === 'true' ? { tool_choice: 'required' as const } : {}),
+    max_output_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
+  });
+
+  if (config.NEWS_FORCE_WEB_SEARCH === 'true' && !responseHasWebSearchCall(response.output)) {
+    throw new Error('News web search was required but no web_search_call ran');
+  }
+
+  const content = response.output_text?.trim();
+  if (!content) throw new Error('Empty news model response');
+  const truncated = response.incomplete_details?.reason === 'max_output_tokens';
+  const text = content + (truncated ? '\n\nОтвет сокращён из-за ограничения длины.' : '');
+  return {
+    text,
+    usage: mapResponsesUsage(model, response.usage),
+  };
+}
+
+async function generateInterestingNewsViaChatCompletions(
+  sphereId: string,
+  sphereLabelText: string,
+  moscowDay: string,
+): Promise<{ text: string; usage: AiUsage }> {
+  const model = newsModel();
   const result = await client.chat.completions.create({
-    ...chatCompletionModelOptions(),
+    ...chatCompletionModelOptions(model),
     max_completion_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
     messages: [
       { role: 'system', content: buildNewsSystemPrompt(sphereLabelText) },
@@ -423,11 +495,22 @@ export async function generateInterestingNews(
   return {
     text,
     usage: buildAiUsage({
-      model: config.OPENAI_MODEL,
+      model,
       promptTokens: result.usage?.prompt_tokens,
       completionTokens: result.usage?.completion_tokens,
     }),
   };
+}
+
+export async function generateInterestingNews(
+  sphereId: string,
+  sphereLabelText: string,
+): Promise<{ text: string; usage: AiUsage }> {
+  const moscowDay = moscowDateString();
+  if (config.NEWS_WEB_SEARCH === 'true') {
+    return generateInterestingNewsWithWebSearch(sphereId, sphereLabelText, moscowDay);
+  }
+  return generateInterestingNewsViaChatCompletions(sphereId, sphereLabelText, moscowDay);
 }
 
 export function buildAutoAnswerSystemPrompt(sarcasmLevel = 0) {
