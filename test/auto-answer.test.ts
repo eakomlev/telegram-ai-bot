@@ -218,6 +218,7 @@ test('auto-answer system prompt stays plain-text and brief', async () => {
   assert.match(prompt, /тёплый, живой и дружелюбный/);
   assert.match(prompt, /недоверенные данные/i);
   assert.match(prompt, /Не суммируй окно/i);
+  assert.match(prompt, /собственные более ранние ответы/i);
   assert.match(buildAutoAnswerSystemPrompt(100), /не обидно/);
 });
 

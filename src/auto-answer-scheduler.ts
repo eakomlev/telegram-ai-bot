@@ -14,10 +14,12 @@ import {
   persistPendingAutoAnswerText,
   reclaimSendingAutoAnswerForSendRetry,
   listDuePendingAutoAnswers,
+  persistBotMessage,
   recordOpenAiUsage,
   selectPrecedingMessages,
   type PendingAutoAnswer,
 } from './db.js';
+import { getBotAuthorLabel } from './mention.js';
 import { isPermanentTelegramDeliveryError } from './news-scheduler.js';
 
 let autoAnswerTimer: NodeJS.Timeout | undefined;
@@ -135,13 +137,19 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer, now: Date) {
   if (ready == null) return;
 
   try {
-    await api.sendMessage(row.chatId, ready, {
+    const sent = await api.sendMessage(row.chatId, ready, {
       reply_parameters: {
         message_id: row.messageId,
         allow_sending_without_reply: true,
       },
       ...(row.messageThreadId != null ? { message_thread_id: row.messageThreadId } : {}),
       link_preview_options: { is_disabled: true },
+    });
+    await persistBotMessage(row.chatId, sent, getBotAuthorLabel()).catch(() => {
+      console.error('Bot message persist failed', {
+        chatId: row.chatId,
+        messageId: sent.message_id,
+      });
     });
   } catch (error) {
     console.error('Auto-answer Telegram send failed', {

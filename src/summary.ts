@@ -6,6 +6,8 @@ export type ChatMessage = {
   sent_at: Date;
   /** Forum topic id; null/undefined for non-forum or General. */
   message_thread_id?: number | null;
+  /** Outgoing bot dialog replies (mention / auto-answer); excluded from summary/gif. */
+  is_bot?: boolean;
 };
 
 export function parseSelection(
