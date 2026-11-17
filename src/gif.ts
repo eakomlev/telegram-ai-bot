@@ -76,7 +76,7 @@ export async function runGifReaction(ctx: Context) {
     const prepared = prepareMessages(rows, config.GIF_MAX_INPUT_CHARS);
     if (!prepared.count) throw new Error('Input cannot fit text budget');
 
-    const reaction = await suggestGifReaction(prepared.json, settings.sarcasmLevel);
+    const reaction = await suggestGifReaction(prepared.json, settings.sarcasmLevel, settings.responseTone);
     await recordOpenAiUsage(chatId, {
       kind: 'gif',
       model: reaction.usage.model,

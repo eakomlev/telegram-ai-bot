@@ -345,6 +345,7 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
       const inputImages = await downloadTelegramImages(ctx.api, fileIds);
       const result = await replyToMention(prompt || 'Опиши и прокомментируй изображение(я).', {
         sarcasmLevel: settings.sarcasmLevel,
+        responseTone: settings.responseTone,
         imagesEnabled: config.MENTION_IMAGES_ENABLED === 'true',
         maxImages: config.MENTION_MAX_IMAGES,
         maxOutputTokens: config.MENTION_MAX_OUTPUT_TOKENS,

@@ -2,6 +2,14 @@ import { config } from './config.js';
 import { getChatSettingsRow, upsertChatSettings, type ChatSettingsRow } from './db.js';
 import { sanitizeSpheres, sphereLabel, type NewsSphereId } from './news-spheres.js';
 
+export const RESPONSE_TONES = ['gentleman', 'pacanchik', 'derzkiy'] as const;
+export type ResponseTone = (typeof RESPONSE_TONES)[number];
+export const RESPONSE_TONE_LABELS: Record<ResponseTone, string> = {
+  gentleman: 'Джентльмен',
+  pacanchik: 'Пацанчик',
+  derzkiy: 'Дерзкий',
+};
+
 export type ChatSettings = {
   summaryAdminOnly: boolean;
   defaultMessageCount: number;
@@ -9,6 +17,7 @@ export type ChatSettings = {
   galleryEnabled: boolean;
   mediaCooldownSeconds: number;
   sarcasmLevel: number;
+  responseTone: ResponseTone;
   mentionEnabled: boolean;
   newsEnabled: boolean;
   newsSpheres: NewsSphereId[];
@@ -19,6 +28,23 @@ const COUNT_STEPS = [50, 100, 200, 500, 1000];
 const COOLDOWN_STEPS = [10, 15, 30, 60, 120, 300];
 const SARCASM_STEPS = [0, 25, 50, 75, 100];
 
+export function isResponseTone(value: unknown): value is ResponseTone {
+  return typeof value === 'string' && (RESPONSE_TONES as readonly string[]).includes(value);
+}
+
+export function sanitizeResponseTone(value: unknown): ResponseTone {
+  return isResponseTone(value) ? value : 'gentleman';
+}
+
+export function cycleResponseTone(current: ResponseTone): ResponseTone {
+  const index = RESPONSE_TONES.indexOf(sanitizeResponseTone(current));
+  return RESPONSE_TONES[(index + 1) % RESPONSE_TONES.length]!;
+}
+
+export function responseToneLabel(tone: ResponseTone): string {
+  return RESPONSE_TONE_LABELS[sanitizeResponseTone(tone)];
+}
+
 export function defaultChatSettings(): ChatSettings {
   return {
     summaryAdminOnly: config.SUMMARY_ADMIN_ONLY === 'true',
@@ -27,6 +53,7 @@ export function defaultChatSettings(): ChatSettings {
     galleryEnabled: config.GALLERY_ENABLED === 'true',
     mediaCooldownSeconds: config.MEDIA_COOLDOWN_SECONDS ?? config.VIDEO_COOLDOWN_SECONDS,
     sarcasmLevel: config.SUMMARY_SARCASM_PERCENT,
+    responseTone: 'gentleman',
     mentionEnabled: config.MENTION_ENABLED === 'true',
     newsEnabled: false,
     newsSpheres: [],
@@ -42,6 +69,7 @@ function fromRow(row: ChatSettingsRow): ChatSettings {
     galleryEnabled: row.gallery_enabled,
     mediaCooldownSeconds: row.media_cooldown_seconds,
     sarcasmLevel: row.sarcasm_level,
+    responseTone: sanitizeResponseTone(row.response_tone),
     mentionEnabled: row.mention_enabled ?? true,
     newsEnabled: row.news_enabled ?? false,
     newsSpheres: sanitizeSpheres(row.news_spheres ?? []),
@@ -69,6 +97,7 @@ export async function resolveChatSettings(chatId: number): Promise<ChatSettings>
     defaultMessageCount: clampCount(row.default_message_count),
     mediaCooldownSeconds: clampCooldown(row.media_cooldown_seconds),
     sarcasmLevel: clampSarcasm(row.sarcasm_level ?? 0),
+    responseTone: sanitizeResponseTone(row.response_tone),
     mentionEnabled: row.mention_enabled ?? defaultChatSettings().mentionEnabled,
     newsEnabled: row.news_enabled ?? false,
     newsSpheres: sanitizeSpheres(row.news_spheres ?? []),
@@ -82,6 +111,7 @@ export async function saveChatSettings(chatId: number, settings: ChatSettings) {
     defaultMessageCount: clampCount(settings.defaultMessageCount),
     mediaCooldownSeconds: clampCooldown(settings.mediaCooldownSeconds),
     sarcasmLevel: clampSarcasm(settings.sarcasmLevel),
+    responseTone: sanitizeResponseTone(settings.responseTone),
     newsSpheres: sanitizeSpheres(settings.newsSpheres),
   };
   await upsertChatSettings(chatId, {
@@ -91,6 +121,7 @@ export async function saveChatSettings(chatId: number, settings: ChatSettings) {
     gallery_enabled: next.galleryEnabled,
     media_cooldown_seconds: next.mediaCooldownSeconds,
     sarcasm_level: next.sarcasmLevel,
+    response_tone: next.responseTone,
     mention_enabled: next.mentionEnabled,
     news_enabled: next.newsEnabled,
     news_spheres: next.newsSpheres,
@@ -131,6 +162,7 @@ export function formatSettings(settings: ChatSettings) {
     `• Саммари только админам: ${on(settings.summaryAdminOnly)}`,
     `• Сообщений по умолчанию в /summary: ${settings.defaultMessageCount}`,
     `• Сарказм: ${settings.sarcasmLevel}%`,
+    `• Тон ответа: ${responseToneLabel(settings.responseTone)}`,
     `• Ответы на @упоминания: ${on(settings.mentionEnabled)}`,
     `• Автоответ на вопросы без ответа: ${on(settings.autoAnswerEnabled)}`,
     `• Автозагрузка видео: ${on(settings.videoEnabled)}`,
