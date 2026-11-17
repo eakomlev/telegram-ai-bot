@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GrammyError } from 'grammy';
 import {
+  computeNewsClaimLeaseMs,
   isPermanentTelegramDeliveryError,
   newsClaimLeaseUntil,
   nextDayNewsRunAt,
   softRetryAt,
 } from '../src/news-scheduler.js';
+import { config } from '../src/config.js';
 import { moscowParts, zonedMoscowTime } from '../src/moscow-time.js';
 
 function grammyError(errorCode: number, description: string) {
@@ -18,10 +20,19 @@ function grammyError(errorCode: number, description: string) {
   );
 }
 
-test('newsClaimLeaseUntil is a few minutes ahead', () => {
+test('computeNewsClaimLeaseMs covers OpenAI timeout retries with a floor', () => {
+  assert.equal(computeNewsClaimLeaseMs(90_000, 1, 60_000, 180_000), 240_000);
+  assert.equal(computeNewsClaimLeaseMs(120_000, 1, 60_000, 180_000), 300_000);
+  assert.equal(computeNewsClaimLeaseMs(30_000, 0, 60_000, 180_000), 180_000);
+});
+
+test('newsClaimLeaseUntil uses timeout-scaled lease from config', () => {
   const now = new Date('2024-03-10T12:00:00.000Z');
   const lease = newsClaimLeaseUntil(now);
-  assert.equal(lease.getTime() - now.getTime(), 3 * 60_000);
+  assert.equal(
+    lease.getTime() - now.getTime(),
+    computeNewsClaimLeaseMs(config.OPENAI_TIMEOUT_MS, config.OPENAI_MAX_RETRIES),
+  );
 });
 
 test('softRetryAt stays inside today when retry is before Moscow 21:00', () => {

@@ -17,11 +17,23 @@ import { postNewsToChat } from './news.js';
 let newsTimer: NodeJS.Timeout | undefined;
 let runningTick: Promise<void> | undefined;
 
-const NEWS_CLAIM_LEASE_MS = 3 * 60_000;
+const NEWS_CLAIM_LEASE_MIN_MS = 3 * 60_000;
+const NEWS_CLAIM_LEASE_BUFFER_MS = 60_000;
 const RESCHEDULE_ATTEMPTS = 3;
 
+/** Lease must cover worst-case OpenAI wait: timeout × (1 + retries) + buffer, min 3 minutes. */
+export function computeNewsClaimLeaseMs(
+  timeoutMs = config.OPENAI_TIMEOUT_MS,
+  maxRetries = config.OPENAI_MAX_RETRIES,
+  bufferMs = NEWS_CLAIM_LEASE_BUFFER_MS,
+  minMs = NEWS_CLAIM_LEASE_MIN_MS,
+) {
+  const worstCase = Math.max(0, timeoutMs) * (1 + Math.max(0, maxRetries)) + Math.max(0, bufferMs);
+  return Math.max(minMs, worstCase);
+}
+
 export function newsClaimLeaseUntil(now = new Date()) {
-  return new Date(now.getTime() + NEWS_CLAIM_LEASE_MS);
+  return new Date(now.getTime() + computeNewsClaimLeaseMs());
 }
 
 export function nextDayNewsRunAt(now = new Date()) {
