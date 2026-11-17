@@ -7,7 +7,7 @@ import {
   formatOwnerUsageReport,
   formatUsd,
   formatUsageReport,
-} from '../src/usage.js';
+} from '../src/ai/usage.js';
 
 test('estimates text cost from env prices', () => {
   // 1M in + 1M out at defaults 2 / 10 (gpt-6-sol)

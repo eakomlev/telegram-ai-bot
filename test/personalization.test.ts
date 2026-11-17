@@ -7,14 +7,14 @@ import {
   formatInterlocutorCharacteristicBlock,
   parseCharacteristicDrafts,
   truncateCharacteristicForPrompt,
-} from '../src/ai.js';
-import { chronologicalFromNewestFirst } from '../src/db.js';
-import { pickInjectedCharacteristic } from '../src/mention.js';
+} from '../src/ai/ai.js';
+import { chronologicalFromNewestFirst } from '../src/core/db.js';
+import { pickInjectedCharacteristic } from '../src/mention/mention.js';
 import {
   isPersonalizationDayDue,
   isPersonalizationHourDue,
   shouldRetryPersonalizationClaim,
-} from '../src/personalization-scheduler.js';
+} from '../src/personalization/personalization-scheduler.js';
 import {
   batchParticipants,
   buildPersonalizationTranscript,
@@ -27,8 +27,8 @@ import {
   shouldClearPersonalizationClaim,
   wipeChatDraftDir,
   writeDraftFiles,
-} from '../src/personalization.js';
-import { zonedMoscowTime } from '../src/moscow-time.js';
+} from '../src/personalization/personalization.js';
+import { zonedMoscowTime } from '../src/core/moscow-time.js';
 import { config } from '../src/config.js';
 
 test('formatTranscriptLine uses [userId|displayName]: text', () => {

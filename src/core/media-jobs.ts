@@ -1,5 +1,5 @@
 import type { Context } from 'grammy';
-import { config } from './config.js';
+import { config } from '../config.js';
 
 const active = new Set<Promise<void>>();
 const controller = new AbortController();

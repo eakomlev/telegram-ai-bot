@@ -2,14 +2,14 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InputFile, type Context } from 'grammy';
-import { config } from './config.js';
-import { deleteVideoCache, getVideoCache, saveVideoCache } from './db.js';
-import { runProcess } from './process.js';
+import { config } from '../config.js';
+import { deleteVideoCache, getVideoCache, saveVideoCache } from '../core/db.js';
+import { runProcess } from '../core/process.js';
 import { parseVideoLink, validateVideoMetadata, type VideoMetadata } from './video-utils.js';
 
-import { resolveChatSettings } from './chat-settings.js';
-import { enqueueMedia, mediaSignal, mediaClosing } from './media-jobs.js';
-import { startStatus } from './status.js';
+import { resolveChatSettings } from '../chat/chat-settings.js';
+import { enqueueMedia, mediaSignal, mediaClosing } from '../core/media-jobs.js';
+import { startStatus } from '../core/status.js';
 
 function videoQualityKey() {
   return [

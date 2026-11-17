@@ -1,9 +1,9 @@
 import type { Context } from 'grammy';
-import { suggestGifReaction } from './ai.js';
-import { resolveChatSettings } from './chat-settings.js';
-import { config } from './config.js';
-import { pool, recordOpenAiUsage, selectMessages } from './db.js';
-import { parseSelection, prepareMessages } from './summary.js';
+import { suggestGifReaction } from '../ai/ai.js';
+import { resolveChatSettings } from '../chat/chat-settings.js';
+import { config } from '../config.js';
+import { pool, recordOpenAiUsage, selectMessages } from '../core/db.js';
+import { parseSelection, prepareMessages } from '../summary/summary.js';
 import { pickRandomUrl, searchGiphyAnimations } from './giphy.js';
 
 const recentGif = new Map<number, number>();

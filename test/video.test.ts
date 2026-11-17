@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseVideoLink, validateVideoMetadata, videoCaption } from '../src/video-utils.js';
-import { runProcess } from '../src/process.js';
+import { parseVideoLink, validateVideoMetadata, videoCaption } from '../src/media/video-utils.js';
+import { runProcess } from '../src/core/process.js';
 
 test('recognizes only standalone short-video links on supported hosts', () => {
   for (const link of ['https://youtube.com/shorts/abc-123?si=tracking', 'https://youtu.be/abc',

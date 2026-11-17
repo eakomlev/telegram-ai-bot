@@ -1,10 +1,9 @@
 import { Bot, type Context } from 'grammy';
-import { aiJobs, enqueueAi } from './ai-jobs.js';
+import { aiJobs, enqueueAi } from './core/ai-jobs.js';
 import { config, allowedChatIds, ownerUserId } from './config.js';
-import { resolveChatSettings } from './chat-settings.js';
+import { resolveChatSettings } from './chat/chat-settings.js';
 import {
   pool,
-  initializeDatabase,
   saveMessage,
   selectMessages,
   claimSummary,
@@ -20,25 +19,26 @@ import {
   getTotalLatestChatMembers,
   recordOpenAiUsage,
   upsertChatParticipant,
-} from './db.js';
-import { summarize, type SummaryStyle } from './ai.js';
-import { parseSelection, prepareMessages, splitReply } from './summary.js';
-import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './settings-ui.js';
-import { formatOwnerUsageReport, formatUsageReport } from './usage.js';
-import { runDailyMemberSnapshots } from './chat-members.js';
+} from './core/db.js';
+import { migrate } from './core/migrate.js';
+import { summarize, type SummaryStyle } from './ai/ai.js';
+import { parseSelection, prepareMessages, splitReply } from './summary/summary.js';
+import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
+import { formatOwnerUsageReport, formatUsageReport } from './ai/usage.js';
+import { runDailyMemberSnapshots } from './chat/chat-members.js';
 
-import { runGifReaction } from './gif.js';
-import { cancelPendingAutoAnswersForActivity, cancelAutoAnswerForEdit, maybeEnqueueAutoAnswer } from './auto-answer.js';
-import { startAutoAnswerScheduler, stopAutoAnswerScheduler } from './auto-answer-scheduler.js';
-import { maybeHandleMention, setBotIdentity } from './mention.js';
-import { maybeRepostVideo } from './video.js';
-import { maybeRepostGallery } from './gallery.js';
-import { stopMediaJobs } from './media-jobs.js';
-import { startNewsScheduler, stopNewsScheduler } from './news-scheduler.js';
+import { runGifReaction } from './gif/gif.js';
+import { cancelPendingAutoAnswersForActivity, cancelAutoAnswerForEdit, maybeEnqueueAutoAnswer } from './auto-answer/auto-answer.js';
+import { startAutoAnswerScheduler, stopAutoAnswerScheduler } from './auto-answer/auto-answer-scheduler.js';
+import { maybeHandleMention, setBotIdentity } from './mention/mention.js';
+import { maybeRepostVideo } from './media/video.js';
+import { maybeRepostGallery } from './media/gallery.js';
+import { stopMediaJobs } from './core/media-jobs.js';
+import { startNewsScheduler, stopNewsScheduler } from './news/news-scheduler.js';
 import {
   startPersonalizationScheduler,
   stopPersonalizationScheduler,
-} from './personalization-scheduler.js';
+} from './personalization/personalization-scheduler.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -348,7 +348,7 @@ process.once('SIGINT', () => { void shutdown(); });
 process.once('SIGTERM', () => { void shutdown(); });
 
 try {
-  await initializeDatabase();
+  await migrate();
   await cleanup();
   cleanupTimer = setInterval(() => {
     void cleanup().catch(() => console.error('Retention cleanup failed'));

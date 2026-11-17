@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { MessageEntity } from 'grammy/types';
-import { config } from './config.js';
+import { config } from '../config.js';
 import type { VideoSource } from './video-utils.js';
 
 const PLATFORM = 'Wildberries';

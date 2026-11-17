@@ -1,8 +1,8 @@
 import type { Api } from 'grammy';
-import { replyToUnansweredQuestion } from './ai.js';
-import { trimPrecedingContext, type ChatContextMessage } from './chat-context.js';
-import { resolveChatSettings, type ResponseTone } from './chat-settings.js';
-import { allowedChatIds, config } from './config.js';
+import { replyToUnansweredQuestion } from '../ai/ai.js';
+import { trimPrecedingContext, type ChatContextMessage } from '../chat/chat-context.js';
+import { resolveChatSettings, type ResponseTone } from '../chat/chat-settings.js';
+import { allowedChatIds, config } from '../config.js';
 import {
   claimPendingAutoAnswer,
   isCancelableAutoAnswerStatus,
@@ -17,9 +17,9 @@ import {
   recordOpenAiUsage,
   selectPrecedingMessages,
   type PendingAutoAnswer,
-} from './db.js';
-import { getBotAuthorLabel, resolveInterlocutorCharacteristic } from './mention.js';
-import { isPermanentTelegramDeliveryError } from './news-scheduler.js';
+} from '../core/db.js';
+import { getBotAuthorLabel, resolveInterlocutorCharacteristic } from '../mention/mention.js';
+import { isPermanentTelegramDeliveryError } from '../news/news-scheduler.js';
 
 let autoAnswerTimer: NodeJS.Timeout | undefined;
 let runningTick: Promise<void> | undefined;

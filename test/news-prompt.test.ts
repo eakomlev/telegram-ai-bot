@@ -12,7 +12,7 @@ import {
   newsUsesWebSearch,
   responseHasSuccessfulWebSearchCall,
   responseHasWebSearchCall,
-} from '../src/ai.js';
+} from '../src/ai/ai.js';
 import { config } from '../src/config.js';
 
 test('web-search news prompt requires search, one real URL, and forbids invention', () => {

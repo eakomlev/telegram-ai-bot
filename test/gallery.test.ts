@@ -3,8 +3,8 @@ import test from 'node:test';
 import { writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Context } from 'grammy';
-import { parseGalleryLink, galleryCaption } from '../src/gallery-utils.js';
-import { repostGallery } from '../src/gallery.js';
+import { parseGalleryLink, galleryCaption } from '../src/media/gallery-utils.js';
+import { repostGallery } from '../src/media/gallery.js';
 
 test('accepts individual supported posts, rejects profiles and arbitrary URLs', () => {
   for (const url of ['https://instagram.com/p/abc_123/', 'https://x.com/user/status/123',
@@ -104,7 +104,7 @@ test('photo upload failure also cleans downloaded and converted files', async ()
 });
 
 test('images and videos share worker capacity and per-chat cooldown', async () => {
-  const { enqueueMedia } = await import('../src/media-jobs.js');
+  const { enqueueMedia } = await import('../src/core/media-jobs.js');
   let release!: () => void;
   let busy = false;
   const first = { chat: { id: -101 }, reply: async () => assert.fail('Unexpected reply') } as unknown as Context;

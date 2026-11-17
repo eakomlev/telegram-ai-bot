@@ -7,6 +7,7 @@ RUN --mount=type=secret,id=npm_ca \
     npm ci
 COPY tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts
 RUN npm run build && npm prune --omit=dev \
     && mkdir /runtime && cp package*.json /runtime/ && mv dist node_modules /runtime/
 

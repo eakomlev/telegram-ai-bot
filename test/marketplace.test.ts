@@ -7,8 +7,8 @@ import {
   pickWildberriesBasketHost,
   wildberriesArticleId,
   wildberriesVolPart,
-} from '../src/marketplace.js';
-import { parseGalleryLink } from '../src/gallery-utils.js';
+} from '../src/media/marketplace.js';
+import { parseGalleryLink } from '../src/media/gallery-utils.js';
 
 test('parses wildberries product urls', () => {
   assert.equal(

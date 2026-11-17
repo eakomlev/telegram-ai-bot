@@ -7,9 +7,9 @@ import {
   newsClaimLeaseUntil,
   nextDayNewsRunAt,
   softRetryAt,
-} from '../src/news-scheduler.js';
+} from '../src/news/news-scheduler.js';
 import { config } from '../src/config.js';
-import { moscowParts, zonedMoscowTime } from '../src/moscow-time.js';
+import { moscowParts, zonedMoscowTime } from '../src/core/moscow-time.js';
 
 function grammyError(errorCode: number, description: string) {
   return new GrammyError(

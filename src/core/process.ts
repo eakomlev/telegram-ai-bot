@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { config } from './config.js';
+import { config } from '../config.js';
 
 function killProcessTree(child: ChildProcess) {
   if (!child.pid) return;

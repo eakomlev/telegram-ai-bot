@@ -1,5 +1,5 @@
 import type { MessageEntity } from 'grammy/types';
-import { config } from './config.js';
+import { config } from '../config.js';
 import { parseMarketplaceLink } from './marketplace.js';
 import { videoCaption, type VideoSource, type VideoMetadata } from './video-utils.js';
 

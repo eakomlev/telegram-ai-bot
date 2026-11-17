@@ -1,6 +1,6 @@
-import { config } from './config.js';
-import { getChatSettingsRow, upsertChatSettings, type ChatSettingsRow } from './db.js';
-import { sanitizeSpheres, sphereLabel, type NewsSphereId } from './news-spheres.js';
+import { config } from '../config.js';
+import { getChatSettingsRow, upsertChatSettings, type ChatSettingsRow } from '../core/db.js';
+import { sanitizeSpheres, sphereLabel, type NewsSphereId } from '../news/news-spheres.js';
 
 export const RESPONSE_TONES = ['gentleman', 'pacanchik', 'derzkiy'] as const;
 export type ResponseTone = (typeof RESPONSE_TONES)[number];

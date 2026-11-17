@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Context } from 'grammy';
-import { enqueueMedia } from '../src/media-jobs.js';
+import { enqueueMedia } from '../src/core/media-jobs.js';
 
 test('short cooldown in another chat cannot expire a long cooldown', async () => {
   const original = Date.now;

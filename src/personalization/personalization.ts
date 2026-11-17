@@ -3,8 +3,8 @@ import path from 'node:path';
 import {
   draftParticipantCharacteristics,
   mergeParticipantCharacteristic,
-} from './ai.js';
-import { config } from './config.js';
+} from '../ai/ai.js';
+import { config } from '../config.js';
 import {
   getLatestMemberCount,
   listChatParticipants,
@@ -14,7 +14,7 @@ import {
   updateParticipantCharacteristic,
   type ChatParticipantRow,
   type PersonalizationMessage,
-} from './db.js';
+} from '../core/db.js';
 import type { Api } from 'grammy';
 
 function dataRoot() {

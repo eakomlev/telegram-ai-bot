@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict';
 import {
   pool,
-  initializeDatabase,
   saveMessage,
   persistBotMessage,
   selectMessages,
@@ -10,12 +9,44 @@ import {
   claimSummary,
   deleteMessage,
   cleanup,
-} from '../src/db.js';
+} from '../src/core/db.js';
+import { migrate } from '../src/core/migrate.js';
 
 const chatA = -987654321001;
 const chatB = -987654321002;
 try {
-  await initializeDatabase();
+  await migrate();
+
+  const expectedTables = [
+    'chat_member_snapshots',
+    'chat_participants',
+    'chat_settings',
+    'messages',
+    'openai_usage',
+    'pending_auto_answers',
+    'schema_migrations',
+    'summary_requests',
+    'video_cache',
+  ];
+  const tables = await pool.query<{ relname: string }>(
+    `SELECT relname FROM pg_class
+     WHERE relkind = 'r'
+       AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+       AND relname = ANY($1::text[])`,
+    [expectedTables],
+  );
+  assert.deepEqual(tables.rows.map((r) => r.relname).sort(), expectedTables);
+  const applied = await pool.query<{ id: string }>(
+    'SELECT id FROM schema_migrations ORDER BY id',
+  );
+  assert.deepEqual(applied.rows.map((r) => r.id), ['001_baseline']);
+
+  await migrate();
+  const appliedAgain = await pool.query<{ id: string }>(
+    'SELECT id FROM schema_migrations ORDER BY id',
+  );
+  assert.deepEqual(appliedAgain.rows.map((r) => r.id), ['001_baseline']);
+
   await pool.query('DELETE FROM messages WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);
   await pool.query('DELETE FROM summary_requests WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);
   const row = (id: number, text: string, ageHours = 0, threadId: number | null = null, isBot = false) => ({

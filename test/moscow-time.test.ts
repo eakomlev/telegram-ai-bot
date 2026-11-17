@@ -5,7 +5,7 @@ import {
   moscowParts,
   pickRandomNewsRunAt,
   zonedMoscowTime,
-} from '../src/moscow-time.js';
+} from '../src/core/moscow-time.js';
 
 test('moscowParts and moscowDateString use Europe/Moscow', () => {
   // 2024-01-15 12:00 UTC = 15:00 Moscow (UTC+3)

@@ -9,15 +9,15 @@ import {
   messageHasAnyMention,
   shouldEnqueueAutoAnswer,
   trimAutoAnswerContext,
-} from '../src/auto-answer.js';
+} from '../src/auto-answer/auto-answer.js';
 import {
   autoAnswerClaimLeaseUntil,
   isCancelableAutoAnswerStatus,
   isSendableAutoAnswerStatus,
   needsOpenAiGeneration,
   ownsAutoAnswerClaim,
-} from '../src/auto-answer-scheduler.js';
-import { setBotIdentity } from '../src/mention.js';
+} from '../src/auto-answer/auto-answer-scheduler.js';
+import { setBotIdentity } from '../src/mention/mention.js';
 
 setBotIdentity(42, 'summary_bot');
 
@@ -211,7 +211,7 @@ test('cancelable statuses include sending but not terminal answered', () => {
 });
 
 test('auto-answer system prompt stays plain-text and brief', async () => {
-  const { buildAutoAnswerSystemPrompt } = await import('../src/ai.js');
+  const { buildAutoAnswerSystemPrompt } = await import('../src/ai/ai.js');
   const prompt = buildAutoAnswerSystemPrompt(0);
   assert.match(prompt, /никто не ответил/i);
   assert.match(prompt, /Не используй Markdown/);

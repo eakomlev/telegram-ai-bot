@@ -1,10 +1,10 @@
 import type { Api } from 'grammy';
-import { allowedChatIds } from './config.js';
+import { allowedChatIds } from '../config.js';
 import {
   hasChatMemberSnapshot,
   listKnownChatIds,
   saveChatMemberSnapshot,
-} from './db.js';
+} from '../core/db.js';
 
 function utcDateString(date = new Date()) {
   return date.toISOString().slice(0, 10);

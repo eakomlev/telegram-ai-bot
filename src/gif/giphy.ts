@@ -1,4 +1,4 @@
-import { config } from './config.js';
+import { config } from '../config.js';
 
 type GiphyImage = { url?: string; mp4?: string; size?: string | number };
 type GiphyItem = {

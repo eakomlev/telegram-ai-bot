@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildGifReactionSystemPrompt, chatCompletionModelOptions } from '../src/ai.js';
-import { pickRandomUrl } from '../src/giphy.js';
-import { parseSelection } from '../src/summary.js';
+import { buildGifReactionSystemPrompt, chatCompletionModelOptions } from '../src/ai/ai.js';
+import { pickRandomUrl } from '../src/gif/giphy.js';
+import { parseSelection } from '../src/summary/summary.js';
 
 test('gif reaction prompt asks for JSON search query', () => {
   const prompt = buildGifReactionSystemPrompt(0);

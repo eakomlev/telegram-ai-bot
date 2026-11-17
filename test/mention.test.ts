@@ -10,8 +10,8 @@ import {
   quotedContext,
   setBotIdentity,
   stripBotMention,
-} from '../src/mention.js';
-import { buildMentionSystemPrompt } from '../src/ai.js';
+} from '../src/mention/mention.js';
+import { buildMentionSystemPrompt } from '../src/ai/ai.js';
 import type { Message } from 'grammy/types';
 
 setBotIdentity(42, 'SummaryBot');
@@ -269,7 +269,7 @@ test('mention system prompt explains preceding context blocks', () => {
 });
 
 test('getBotAuthorLabel uses @username when identity is set', async () => {
-  const { getBotAuthorLabel, setBotIdentity } = await import('../src/mention.js');
+  const { getBotAuthorLabel, setBotIdentity } = await import('../src/mention/mention.js');
   setBotIdentity(42, 'Summary_Bot');
   assert.equal(getBotAuthorLabel(), '@summary_bot');
 });

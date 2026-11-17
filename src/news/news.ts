@@ -1,7 +1,7 @@
 import type { Api } from 'grammy';
-import { generateInterestingNews } from './ai.js';
-import { config } from './config.js';
-import { recordOpenAiUsage } from './db.js';
+import { generateInterestingNews } from '../ai/ai.js';
+import { config } from '../config.js';
+import { recordOpenAiUsage } from '../core/db.js';
 import { pickRandomSphere, sanitizeSpheres, sphereLabel } from './news-spheres.js';
 
 export async function postNewsToChat(api: Api, chatId: number, spheres: readonly string[]) {

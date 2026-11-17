@@ -1,7 +1,7 @@
 import type { Api } from 'grammy';
 import { GrammyError } from 'grammy';
-import { resolveChatSettings, type ChatSettings } from './chat-settings.js';
-import { allowedChatIds, config } from './config.js';
+import { resolveChatSettings, type ChatSettings } from '../chat/chat-settings.js';
+import { allowedChatIds, config } from '../config.js';
 import {
   claimNewsSend,
   disableNewsForChat,
@@ -10,8 +10,8 @@ import {
   markNewsSent,
   markNewsSentDay,
   rescheduleNewsRun,
-} from './db.js';
-import { moscowDateString, moscowParts, pickRandomNewsRunAt, zonedMoscowTime } from './moscow-time.js';
+} from '../core/db.js';
+import { moscowDateString, moscowParts, pickRandomNewsRunAt, zonedMoscowTime } from '../core/moscow-time.js';
 import { postNewsToChat } from './news.js';
 
 let newsTimer: NodeJS.Timeout | undefined;

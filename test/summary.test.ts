@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseSelection, prepareMessages, splitReply } from '../src/summary.js';
+import { parseSelection, prepareMessages, splitReply } from '../src/summary/summary.js';
 
 test('accepts defaults, message counts and bounded periods', () => {
   assert.deepEqual(parseSelection('', 100, 1000, 30), { kind: 'count', count: 100 });
@@ -35,7 +35,7 @@ test('splits Telegram responses without losing text or breaking emoji', () => {
 
 
 test('caption splitting preserves all text and emoji at the caption boundary', async () => {
-  const { splitCaptionReply } = await import('../src/summary.js');
+  const { splitCaptionReply } = await import('../src/summary/summary.js');
   for (const value of ['x'.repeat(2000), 'x'.repeat(1023) + '😀' + 'y'.repeat(5000)]) {
     const { caption, messages } = splitCaptionReply(value, 1024, 4000);
     assert.equal(caption + messages.join(''), value);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AiJobs } from '../src/ai-jobs.js';
+import { AiJobs } from '../src/core/ai-jobs.js';
 
 test('AI work returns immediately, bounds concurrency and drains on shutdown', async () => {
   const jobs = new AiJobs(2);

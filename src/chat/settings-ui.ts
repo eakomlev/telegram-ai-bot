@@ -11,9 +11,9 @@ import {
   saveChatSettings,
   type ChatSettings,
 } from './chat-settings.js';
-import { cancelAllPendingAutoAnswersForChat, deleteChatSettings } from './db.js';
-import { isNewsSphereId, NEWS_SPHERES } from './news-spheres.js';
-import { scheduleNewsIfNeeded } from './news-scheduler.js';
+import { cancelAllPendingAutoAnswersForChat, deleteChatSettings } from '../core/db.js';
+import { isNewsSphereId, NEWS_SPHERES } from '../news/news-spheres.js';
+import { scheduleNewsIfNeeded } from '../news/news-scheduler.js';
 
 const PREFIX = 'set:';
 

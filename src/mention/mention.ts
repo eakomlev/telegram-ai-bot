@@ -1,24 +1,24 @@
 import { InputFile, type Api, type Context } from 'grammy';
 import type { Message, MessageEntity } from 'grammy/types';
-import { replyToMention, type MentionInputImage } from './ai.js';
+import { replyToMention, type MentionInputImage } from '../ai/ai.js';
 import {
   formatContextLine,
   trimPrecedingContext,
   type ChatContextMessage,
-} from './chat-context.js';
-import { resolveChatSettings } from './chat-settings.js';
-import { config } from './config.js';
+} from '../chat/chat-context.js';
+import { resolveChatSettings } from '../chat/chat-settings.js';
+import { config } from '../config.js';
 import {
   getChatParticipant,
   getLatestMemberCount,
   persistBotMessage,
   recordOpenAiUsage,
   selectPrecedingMessages,
-} from './db.js';
-import { isChatMemberCountEligible } from './personalization.js';
-import { splitReply, splitCaptionReply, truncateText } from './summary.js';
-import { enqueueAi } from './ai-jobs.js';
-import { startStatus } from './status.js';
+} from '../core/db.js';
+import { isChatMemberCountEligible } from '../personalization/personalization.js';
+import { splitReply, splitCaptionReply, truncateText } from '../summary/summary.js';
+import { enqueueAi } from '../core/ai-jobs.js';
+import { startStatus } from '../core/status.js';
 
 /** Pure gate for reply-time characteristic injection (fail closed on unknown member count). */
 export function pickInjectedCharacteristic(params: {

@@ -4,17 +4,17 @@ import {
   formatContextLine,
   trimPrecedingContext,
   type ChatContextMessage,
-} from './chat-context.js';
-import { resolveChatSettings } from './chat-settings.js';
-import { config } from './config.js';
+} from '../chat/chat-context.js';
+import { resolveChatSettings } from '../chat/chat-settings.js';
+import { config } from '../config.js';
 import {
   cancelPendingAutoAnswersForScope,
   markPendingAutoAnswerStatus,
   enqueuePendingAutoAnswer,
-} from './db.js';
-import { parseGalleryLink } from './gallery-utils.js';
-import { messageAddressesBot } from './mention.js';
-import { parseVideoLink } from './video-utils.js';
+} from '../core/db.js';
+import { parseGalleryLink } from '../media/gallery-utils.js';
+import { messageAddressesBot } from '../mention/mention.js';
+import { parseVideoLink } from '../media/video-utils.js';
 
 /** @deprecated Prefer ChatContextMessage — kept for existing imports/tests. */
 export type AutoAnswerContextMessage = ChatContextMessage;

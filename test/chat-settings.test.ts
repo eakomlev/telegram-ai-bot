@@ -5,7 +5,7 @@ import {
   buildGifReactionSystemPrompt,
   buildMentionSystemPrompt,
   buildSummarySystemPrompt,
-} from '../src/ai.js';
+} from '../src/ai/ai.js';
 import {
   cycleDefaultCount,
   cycleMediaCooldown,
@@ -14,7 +14,7 @@ import {
   defaultChatSettings,
   formatSettings,
   sanitizeResponseTone,
-} from '../src/chat-settings.js';
+} from '../src/chat/chat-settings.js';
 
 test('cycles default message counts within max', () => {
   assert.equal(cycleDefaultCount(100), 200);

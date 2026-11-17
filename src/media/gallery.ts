@@ -2,13 +2,13 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InputFile, type Context } from 'grammy';
-import { config } from './config.js';
-import { enqueueMedia, mediaSignal, mediaClosing } from './media-jobs.js';
-import { runProcess } from './process.js';
-import { resolveChatSettings } from './chat-settings.js';
+import { config } from '../config.js';
+import { enqueueMedia, mediaSignal, mediaClosing } from '../core/media-jobs.js';
+import { runProcess } from '../core/process.js';
+import { resolveChatSettings } from '../chat/chat-settings.js';
 import { galleryCaption, parseGalleryLink } from './gallery-utils.js';
 import { downloadMarketplaceProduct, isMarketplacePlatform } from './marketplace.js';
-import { startStatus } from './status.js';
+import { startStatus } from '../core/status.js';
 
 type Source = NonNullable<ReturnType<typeof parseGalleryLink>>;
 export async function repostGallery(ctx: Context, source: Source, execute = runProcess) {

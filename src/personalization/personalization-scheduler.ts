@@ -1,11 +1,11 @@
 import type { Api } from 'grammy';
-import { allowedChatIds, config } from './config.js';
+import { allowedChatIds, config } from '../config.js';
 import {
   claimPersonalizationRun,
   clearPersonalizationRunClaim,
   listDuePersonalizationChats,
-} from './db.js';
-import { moscowDateString, moscowParts } from './moscow-time.js';
+} from '../core/db.js';
+import { moscowDateString, moscowParts } from '../core/moscow-time.js';
 import {
   runPersonalizationForChat,
   shouldClearPersonalizationClaim,

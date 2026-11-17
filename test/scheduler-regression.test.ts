@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Api } from 'grammy';
-import { pool } from '../src/db.js';
+import { pool } from '../src/core/db.js';
 import { config } from '../src/config.js';
-import { cancelAutoAnswerForEdit } from '../src/auto-answer.js';
-import { runAutoAnswerSchedulerTick, stopAutoAnswerScheduler } from '../src/auto-answer-scheduler.js';
-import { runNewsSchedulerTick, stopNewsScheduler } from '../src/news-scheduler.js';
+import { cancelAutoAnswerForEdit } from '../src/auto-answer/auto-answer.js';
+import { runAutoAnswerSchedulerTick, stopAutoAnswerScheduler } from '../src/auto-answer/auto-answer-scheduler.js';
+import { runNewsSchedulerTick, stopNewsScheduler } from '../src/news/news-scheduler.js';
 import {
   runPersonalizationSchedulerTick,
   stopPersonalizationScheduler,
-} from '../src/personalization-scheduler.js';
-import { zonedMoscowTime } from '../src/moscow-time.js';
+} from '../src/personalization/personalization-scheduler.js';
+import { zonedMoscowTime } from '../src/core/moscow-time.js';
 import type { Message } from 'grammy/types';
 
 test('editing cancels only the original question even after removing its caption', async () => {

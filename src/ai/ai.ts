@@ -1,9 +1,9 @@
 import OpenAI from 'openai';
-import { formatAutoAnswerUserPrompt } from './auto-answer.js';
-import type { ChatContextMessage } from './chat-context.js';
-import type { ResponseTone } from './chat-settings.js';
-import { config } from './config.js';
-import { moscowDateString } from './moscow-time.js';
+import { formatAutoAnswerUserPrompt } from '../auto-answer/auto-answer.js';
+import type { ChatContextMessage } from '../chat/chat-context.js';
+import type { ResponseTone } from '../chat/chat-settings.js';
+import { config } from '../config.js';
+import { moscowDateString } from '../core/moscow-time.js';
 import { buildAiUsage, type AiUsage } from './usage.js';
 
 const client = new OpenAI({

@@ -6,7 +6,7 @@ import {
   pickRandomSphere,
   sanitizeSpheres,
   sphereLabel,
-} from '../src/news-spheres.js';
+} from '../src/news/news-spheres.js';
 
 test('catalog has fixed ids and Russian labels', () => {
   assert.equal(NEWS_SPHERES.length, 15);
