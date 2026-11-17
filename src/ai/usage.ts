@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import type { OpenAiUsageTotals } from '../core/db.js';
+import { truncateText } from '../summary/summary.js';
 
 export type UsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer' | 'personalization';
 
@@ -114,6 +115,37 @@ export function formatOwnerUsageReport(
     }
   } else {
     lines.push('', 'Пока нет записанных запросов OpenAI.');
+  }
+  return lines.join('\n');
+}
+
+export type OwnerParticipantChatLine = {
+  label: string;
+  participants: { displayName: string; username: string | null; characteristic: string }[];
+};
+
+const DEFAULT_PARTICIPANT_CHARACTERISTIC_CHARS = 200;
+
+/** Owner `/stats` section: chats with saved participant characteristics. */
+export function formatOwnerParticipantsReport(
+  chats: OwnerParticipantChatLine[],
+  opts?: { maxCharacteristicChars?: number },
+): string {
+  if (!chats.length) {
+    return 'Пока нет сохранённых характеристик участников.';
+  }
+  const maxChars = opts?.maxCharacteristicChars ?? DEFAULT_PARTICIPANT_CHARACTERISTIC_CHARS;
+  const lines = ['Участники и характеристики:'];
+  for (const chat of chats) {
+    lines.push(`• ${chat.label}:`);
+    for (const participant of chat.participants) {
+      const name = participant.username
+        ? `${participant.displayName} (@${participant.username})`
+        : participant.displayName;
+      const collapsed = participant.characteristic.trim().replace(/\s+/g, ' ');
+      const text = truncateText(collapsed, maxChars);
+      lines.push(`  — ${name}: ${text}`);
+    }
   }
   return lines.join('\n');
 }

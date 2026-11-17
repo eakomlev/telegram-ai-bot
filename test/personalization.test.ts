@@ -11,8 +11,13 @@ import {
 import { chronologicalFromNewestFirst } from '../src/core/db.js';
 import { pickInjectedCharacteristic } from '../src/mention/mention.js';
 import {
+  formatManualPersonalizationSummary,
+  formatPersonalizeChatIneligibleMessage,
   isPersonalizationDayDue,
   isPersonalizationHourDue,
+  isPersonalizationRunInProgress,
+  parsePersonalizeChatIdArg,
+  PersonalizationBusyError,
   shouldRetryPersonalizationClaim,
 } from '../src/personalization/personalization-scheduler.js';
 import {
@@ -152,6 +157,40 @@ test('soft-failure claim helpers clear empty productive runs only', () => {
   assert.equal(shouldRetryPersonalizationClaim({ skipped: true, updated: 0 }), false);
   assert.equal(shouldRetryPersonalizationClaim({ skipped: false, updated: 0 }), true);
   assert.equal(shouldRetryPersonalizationClaim(undefined, new Error('drafts empty')), true);
+});
+
+test('parsePersonalizeChatIdArg accepts empty, digits, rejects junk', () => {
+  assert.equal(parsePersonalizeChatIdArg(''), undefined);
+  assert.equal(parsePersonalizeChatIdArg('  '), undefined);
+  assert.equal(parsePersonalizeChatIdArg('-100123'), -100123);
+  assert.equal(parsePersonalizeChatIdArg('42'), 42);
+  assert.equal(parsePersonalizeChatIdArg('abc'), null);
+  assert.equal(parsePersonalizeChatIdArg('1.5'), null);
+});
+
+test('isPersonalizationRunInProgress is idle by default', () => {
+  assert.equal(isPersonalizationRunInProgress(), false);
+  assert.ok(new PersonalizationBusyError().name === 'PersonalizationBusyError');
+});
+
+test('formatManualPersonalizationSummary covers empty, skip, update, error', () => {
+  assert.match(formatManualPersonalizationSummary([]), /Нет чатов/);
+  const text = formatManualPersonalizationSummary([
+    { chatId: -1, skipped: false, updated: 2 },
+    { chatId: -2, skipped: true, reason: 'no_messages', updated: 0 },
+    { chatId: -3, skipped: false, updated: 0, error: 'drafts empty' },
+  ]);
+  assert.match(text, /Персонализация завершена/);
+  assert.match(text, /-1: обновлено 2/);
+  assert.match(text, /-2: пропуск \(no_messages\)/);
+  assert.match(text, /-3: ошибка — drafts empty/);
+  assert.match(text, /Чатов: 3, обновлено участников: 2, пропусков: 1, ошибок: 1/);
+});
+
+test('formatPersonalizeChatIneligibleMessage is explicit per reason', () => {
+  assert.match(formatPersonalizeChatIneligibleMessage(-1001, 'not_allowed'), /ALLOWED_CHAT_IDS/);
+  assert.match(formatPersonalizeChatIneligibleMessage(-1001, 'unknown'), /неизвестен/);
+  assert.match(formatPersonalizeChatIneligibleMessage(-1001, 'disabled'), /выключена/);
 });
 
 test('wipeChatDraftDir then writeDraftFiles appends only within one run', async () => {

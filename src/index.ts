@@ -17,6 +17,8 @@ import {
   countOpenAiUsageChats,
   getLatestChatMemberCounts,
   getTotalLatestChatMembers,
+  listChatParticipantsWithCharacteristics,
+  listChatsWithCharacteristicsForStats,
   recordOpenAiUsage,
   upsertChatParticipant,
 } from './core/db.js';
@@ -24,8 +26,9 @@ import { migrate } from './core/migrate.js';
 import { summarize, type SummaryStyle } from './ai/ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary/summary.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
-import { formatOwnerUsageReport, formatUsageReport } from './ai/usage.js';
+import { formatOwnerParticipantsReport, formatOwnerUsageReport, formatUsageReport } from './ai/usage.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
+import { startStatus } from './core/status.js';
 
 import { runGifReaction } from './gif/gif.js';
 import { cancelPendingAutoAnswersForActivity, cancelAutoAnswerForEdit, maybeEnqueueAutoAnswer } from './auto-answer/auto-answer.js';
@@ -36,6 +39,12 @@ import { maybeRepostGallery } from './media/gallery.js';
 import { stopMediaJobs } from './core/media-jobs.js';
 import { startNewsScheduler, stopNewsScheduler } from './news/news-scheduler.js';
 import {
+  formatManualPersonalizationSummary,
+  getManualPersonalizationChatBlockReason,
+  isPersonalizationRunInProgress,
+  parsePersonalizeChatIdArg,
+  PersonalizationBusyError,
+  runManualPersonalization,
   startPersonalizationScheduler,
   stopPersonalizationScheduler,
 } from './personalization/personalization-scheduler.js';
@@ -92,14 +101,14 @@ bot.use(async (ctx, next) => {
   if (stopping) return;
   if (ctx.chat?.type === 'private') {
     const text = ctx.message?.text ?? '';
-    if (isBotOwner(ctx) && /^\/stats(?:@\w+)?(?:\s|$)/i.test(text)) {
+    if (isBotOwner(ctx) && /^\/(?:stats|personalize)(?:@\w+)?(?:\s|$)/i.test(text)) {
       await next();
       return;
     }
     if (text.startsWith('/')) {
       await ctx.reply(
         ownerUserId && isBotOwner(ctx)
-          ? 'В личке доступна только /stats — статистика OpenAI по всем группам.'
+          ? 'В личке доступны только /stats и /personalize.'
           : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
       );
     }
@@ -176,9 +185,75 @@ bot.command('stats', async (ctx) => {
     total: totalGroups,
     members: totalMembers,
   });
-  for (const part of splitReply(report, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
+  const characteristicChatIds = await listChatsWithCharacteristicsForStats(30);
+  const participantChats = await Promise.all(
+    characteristicChatIds.map(async (chatId) => {
+      const participants = await listChatParticipantsWithCharacteristics(
+        chatId,
+        config.PERSONALIZATION_MAX_USERS_PER_CHAT,
+      );
+      return {
+        label: await chatUsageLabel(chatId),
+        participants: participants.map((p) => ({
+          displayName: p.displayName,
+          username: p.username,
+          characteristic: p.characteristic ?? '',
+        })),
+      };
+    }),
+  );
+  const fullReport = [report, '', formatOwnerParticipantsReport(participantChats)].join('\n');
+  for (const part of splitReply(fullReport, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
     await ctx.reply(part, { link_preview_options: { is_disabled: true } });
   }
+});
+bot.command('personalize', async (ctx) => {
+  if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
+  if (!ownerUserId) {
+    await ctx.reply('Задайте OWNER_USER_ID в .env и перезапустите бота.');
+    return;
+  }
+  if (config.PERSONALIZATION_ENABLED !== 'true') {
+    await ctx.reply('Персонализация выключена глобально (PERSONALIZATION_ENABLED).');
+    return;
+  }
+  const raw = typeof ctx.match === 'string' ? ctx.match : '';
+  const parsed = parsePersonalizeChatIdArg(raw);
+  if (parsed === null) {
+    await ctx.reply('Использование: /personalize или /personalize <chat_id>');
+    return;
+  }
+  if (parsed !== undefined) {
+    const blockReason = await getManualPersonalizationChatBlockReason(parsed);
+    if (blockReason) {
+      await ctx.reply(blockReason);
+      return;
+    }
+  }
+  if (isPersonalizationRunInProgress()) {
+    await ctx.reply('Персонализация уже выполняется. Попробуйте позже.');
+    return;
+  }
+  const status = await startStatus(ctx, '⏳ Запускаю персонализацию…');
+  void runManualPersonalization(bot.api, parsed === undefined ? {} : { chatIds: [parsed] })
+    .then(async (results) => {
+      await status.clear();
+      const summary = formatManualPersonalizationSummary(results);
+      for (const part of splitReply(summary, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
+        await ctx.reply(part, { link_preview_options: { is_disabled: true } });
+      }
+    })
+    .catch(async (error) => {
+      if (error instanceof PersonalizationBusyError) {
+        await status.clear();
+        await ctx.reply('Персонализация уже выполняется. Попробуйте позже.');
+        return;
+      }
+      console.error('Manual personalization failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      await status.fail('Не удалось запустить персонализацию. Попробуйте позже.');
+    });
 });
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст и подписи участников, а также текст и подписи исходящих ответов бота на @упоминания и автоответы (сами изображения не сохраняются; не саммари, стихи, GIF, новости и служебные сообщения), ` +
@@ -374,7 +449,10 @@ try {
   await bot.api.setMyCommands(groupCommands);
   await bot.api.setMyCommands(groupCommands, { scope: { type: 'all_group_chats' } });
   await bot.api.setMyCommands(
-    [{ command: 'stats', description: 'Расходы OpenAI по всем группам' }],
+    [
+      { command: 'stats', description: 'Расходы OpenAI по всем группам' },
+      { command: 'personalize', description: 'Запуск персонализации участников' },
+    ],
     { scope: { type: 'all_private_chats' } },
   );
   await bot.start({

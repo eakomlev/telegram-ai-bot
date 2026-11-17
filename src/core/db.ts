@@ -1009,6 +1009,38 @@ export async function listChatParticipants(
   return result.rows.map(mapChatParticipant);
 }
 
+/** Distinct chats that already have ≥1 non-empty characteristic, newest first. */
+export async function listChatsWithCharacteristicsForStats(maxChats = 30): Promise<number[]> {
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT chat_id::text AS chat_id
+     FROM chat_participants
+     WHERE characteristic IS NOT NULL AND btrim(characteristic) <> ''
+     GROUP BY chat_id
+     ORDER BY MAX(characteristic_updated_at) DESC NULLS LAST
+     LIMIT $1`,
+    [maxChats],
+  );
+  return result.rows.map((row) => Number(row.chat_id));
+}
+
+/** Participants with a non-empty characteristic, most recently seen first. */
+export async function listChatParticipantsWithCharacteristics(
+  chatId: number,
+  limit = config.PERSONALIZATION_MAX_USERS_PER_CHAT,
+): Promise<ChatParticipantRow[]> {
+  const result = await pool.query<ChatParticipantDbRow>(
+    `SELECT chat_id::text AS chat_id, user_id::text AS user_id, username, display_name, characteristic,
+            characteristic_updated_at, characteristic_source_until, first_seen_at, last_seen_at, updated_at
+     FROM chat_participants
+     WHERE chat_id = $1
+       AND characteristic IS NOT NULL AND btrim(characteristic) <> ''
+     ORDER BY last_seen_at DESC
+     LIMIT $2`,
+    [String(chatId), limit],
+  );
+  return result.rows.map(mapChatParticipant);
+}
+
 export async function updateParticipantCharacteristic(params: {
   chatId: number;
   userId: number;
@@ -1082,6 +1114,16 @@ export async function listDuePersonalizationChats(moscowDate: string): Promise<n
   return result.rows.map((row) => Number(row.chat_id));
 }
 
+/** All chats with personalization enabled (ignores last_run_on). */
+export async function listEnabledPersonalizationChats(): Promise<number[]> {
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT chat_id::text AS chat_id
+     FROM chat_settings
+     WHERE personalization_enabled = true`,
+  );
+  return result.rows.map((row) => Number(row.chat_id));
+}
+
 /**
  * Atomically claim today's personalization run by setting last_run_on.
  * Returns true if this process owns the run.
@@ -1097,6 +1139,20 @@ export async function claimPersonalizationRun(chatId: number, moscowDate: string
     [String(chatId), moscowDate],
   );
   return (result.rowCount ?? 0) === 1;
+}
+
+/**
+ * Unconditionally set last_run_on (manual path after soft-skip/success).
+ * Does not require last_run_on to be null/older.
+ */
+export async function markPersonalizationRun(chatId: number, moscowDate: string): Promise<void> {
+  await pool.query(
+    `UPDATE chat_settings
+     SET personalization_last_run_on = $2::date, updated_at = now()
+     WHERE chat_id = $1
+       AND personalization_enabled = true`,
+    [String(chatId), moscowDate],
+  );
 }
 
 /** Clear today's claim so a failed run can retry on the next tick. */

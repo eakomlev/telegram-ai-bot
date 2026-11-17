@@ -4,6 +4,7 @@ import {
   buildAiUsage,
   estimateImageCostUsd,
   estimateTextCostUsd,
+  formatOwnerParticipantsReport,
   formatOwnerUsageReport,
   formatUsd,
   formatUsageReport,
@@ -90,4 +91,50 @@ test('formatOwnerUsageReport lists chats across groups', () => {
   assert.match(text, /\$0\.20/);
   assert.match(text, /сегодня \$0\.012/);
   assert.doesNotMatch(text, /Цены:/);
+});
+
+test('formatOwnerParticipantsReport empty state', () => {
+  assert.equal(
+    formatOwnerParticipantsReport([]),
+    'Пока нет сохранённых характеристик участников.',
+  );
+});
+
+test('formatOwnerParticipantsReport lists people and truncates characteristic', () => {
+  const long = 'я'.repeat(250);
+  const text = formatOwnerParticipantsReport([
+    {
+      label: 'Семья (-1001)',
+      participants: [
+        { displayName: 'Аня', username: 'anya', characteristic: 'любит краткие ответы' },
+        { displayName: 'Иван', username: null, characteristic: long },
+      ],
+    },
+  ]);
+  assert.match(text, /^Участники и характеристики:/);
+  assert.match(text, /• Семья \(-1001\):/);
+  assert.match(text, /— Аня \(@anya\): любит краткие ответы/);
+  assert.match(text, /— Иван: /);
+  assert.ok(!text.includes(long));
+  const ivanLine = text.split('\n').find((line) => line.includes('— Иван:'));
+  assert.ok(ivanLine);
+  assert.ok(ivanLine!.endsWith('…'));
+  assert.ok(ivanLine!.length <= '  — Иван: '.length + 200);
+});
+
+test('formatOwnerParticipantsReport collapses whitespace before truncate', () => {
+  const text = formatOwnerParticipantsReport([
+    {
+      label: 'Чат (-1)',
+      participants: [
+        {
+          displayName: 'Аня',
+          username: null,
+          characteristic: 'любит\nкраткие   ответы\r\nи мемы',
+        },
+      ],
+    },
+  ]);
+  assert.match(text, /— Аня: любит краткие ответы и мемы/);
+  assert.doesNotMatch(text, /\n  — Аня: любит\n/);
 });
