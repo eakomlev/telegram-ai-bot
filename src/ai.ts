@@ -381,17 +381,37 @@ export async function suggestGifReaction(json: string, sarcasmLevel = 0): Promis
   };
 }
 
-export function buildNewsSystemPrompt(sphereLabel: string) {
+export type NewsPromptOptions = { webSearch?: boolean };
+
+export function newsUsesWebSearch() {
+  return config.NEWS_WEB_SEARCH === 'true';
+}
+
+export function buildNewsSystemPrompt(sphereLabel: string, options: NewsPromptOptions = {}) {
+  const webSearch = options.webSearch === true;
+  const freshnessRule = webSearch
+    ? '• Предпочитай новости примерно за последние 24–48 часов относительно сегодняшней даты по Москве (она будет во входном сообщении).'
+    : '• Бери только свежие новости примерно за последние 48 часов.';
+  const sourceRules = webSearch
+    ? [
+      '• Обязательно используй веб-поиск (web search), чтобы взять актуальную новость по текущим событиям, а не опирайся только на память модели.',
+      '• Не выдумывай факты, цифры, цитаты, названия и ссылки. Не добавляй фейковые URL.',
+      '• Можно указать ровно одну реальную ссылку на источник обычным текстом (полный URL без Markdown и HTML), если она есть в результатах поиска. Больше одной ссылки не ставь.',
+      '• Если уверенности в факте нет — лучше сформулируй осторожнее или выбери другую подтверждённую свежую новость по теме.',
+    ].join('\n')
+    : [
+      '• Опирайся на свои знания: живого веб-поиска нет. Не притворяйся, что только что открыл сайт.',
+      '• Не выдумывай факты, цифры, цитаты, названия и ссылки. Не добавляй фейковые URL.',
+      '• Если уверенности в факте нет — лучше сформулируй осторожнее или выбери другую известную тебе свежую новость по теме. Честно учитывай ограничения памяти модели.',
+    ].join('\n');
+
   return `Ты — весёлый коллега из досугового Telegram-чата. Раз в день кидаешь одну свежую интересную новость по теме «${sphereLabel}».
 
 Правила
-• Обязательно используй веб-поиск (web search), чтобы взять актуальную новость по текущим событиям, а не опирайся только на память модели.
+${sourceRules}
 • Ровно одна новость: живой короткий рассказ, будто делишься за обедом, а не лента и не дайджест.
 • Пиши по-русски, обычным текстом. Не используй Markdown и HTML.
-• Предпочитай новости примерно за последние 24–48 часов относительно сегодняшней даты по Москве (она будет во входном сообщении).
-• Не выдумывай факты, цифры, цитаты, названия и ссылки. Не добавляй фейковые URL.
-• Можно указать ровно одну реальную ссылку на источник обычным текстом (полный URL без Markdown и HTML), если она есть в результатах поиска. Больше одной ссылки не ставь.
-• Если уверенности в факте нет — лучше сформулируй осторожнее или выбери другую подтверждённую свежую новость по теме.
+${freshnessRule}
 • Без кликбейта, политики ради политики, NSFW и токсичности.
 • Можно добавить лёгкую доброжелательную шутку в конце, но новость должна остаться понятной.
 • Начни с эмодзи и короткого заголовка, затем 2–5 предложений сути.
@@ -404,11 +424,19 @@ export function newsModel() {
   return custom || config.OPENAI_MODEL;
 }
 
-export function buildNewsUserPrompt(sphereId: string, sphereLabelText: string, moscowDay: string) {
+export function buildNewsUserPrompt(
+  sphereId: string,
+  sphereLabelText: string,
+  moscowDay: string,
+  options: NewsPromptOptions = {},
+) {
+  const ask = options.webSearch === true
+    ? 'Найди через веб-поиск одну свежую интересную новость по этой сфере и расскажи о ней.'
+    : 'Пришли одну свежую интересную новость по этой сфере.';
   return (
     `Сфера: ${sphereLabelText} (${sphereId}).\n` +
     `Сегодня по Москве: ${moscowDay}.\n` +
-    'Найди через веб-поиск одну свежую интересную новость по этой сфере и расскажи о ней.'
+    ask
   );
 }
 
@@ -424,8 +452,71 @@ export function buildNewsWebSearchTool() {
   };
 }
 
-export function responseHasWebSearchCall(output: ReadonlyArray<{ type?: string }> | undefined | null) {
+export function buildNewsResponsesCreateParams(
+  sphereId: string,
+  sphereLabelText: string,
+  moscowDay: string,
+) {
+  const force = config.NEWS_FORCE_WEB_SEARCH === 'true';
+  return {
+    model: newsModel(),
+    instructions: buildNewsSystemPrompt(sphereLabelText, { webSearch: true }),
+    input: buildNewsUserPrompt(sphereId, sphereLabelText, moscowDay, { webSearch: true }),
+    tools: [buildNewsWebSearchTool()],
+    ...(force ? { tool_choice: 'required' as const } : {}),
+    max_output_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
+    // Keep reasoning low so tool/reasoning tokens do not exhaust the news output budget.
+    reasoning: { effort: 'low' as const },
+  };
+}
+
+export function responseHasWebSearchCall(
+  output: ReadonlyArray<{ type?: string; status?: string | null }> | undefined | null,
+) {
   return Array.isArray(output) && output.some((item) => item?.type === 'web_search_call');
+}
+
+export function responseHasSuccessfulWebSearchCall(
+  output: ReadonlyArray<{ type?: string; status?: string | null }> | undefined | null,
+) {
+  return Array.isArray(output)
+    && output.some((item) => item?.type === 'web_search_call' && item.status === 'completed');
+}
+
+export type NewsResponsesValidationInput = {
+  status?: string | null;
+  error?: { code?: string | null; message?: string | null } | null;
+  incomplete_details?: { reason?: string | null } | null;
+  output?: ReadonlyArray<{ type?: string; status?: string | null }> | null;
+  output_text?: string | null;
+};
+
+export function assertNewsResponsesResult(
+  response: NewsResponsesValidationInput,
+  options: { forceWebSearch?: boolean } = {},
+): string {
+  if (response.error) {
+    const detail = [response.error.code, response.error.message].filter(Boolean).join(': ');
+    throw new Error(`News Responses API error${detail ? ` (${detail})` : ''}`);
+  }
+
+  if (response.status !== 'completed') {
+    const reason = response.incomplete_details?.reason;
+    const suffix = reason ? ` (${reason})` : '';
+    throw new Error(`News Responses status is ${response.status ?? 'unknown'}${suffix}`);
+  }
+
+  const forceWebSearch = options.forceWebSearch ?? config.NEWS_FORCE_WEB_SEARCH === 'true';
+  if (forceWebSearch && !responseHasSuccessfulWebSearchCall(response.output)) {
+    if (responseHasWebSearchCall(response.output)) {
+      throw new Error('News web search was required but web_search_call did not complete successfully');
+    }
+    throw new Error('News web search was required but no web_search_call ran');
+  }
+
+  const content = response.output_text?.trim();
+  if (!content) throw new Error('Empty news model response');
+  return content;
 }
 
 export function mapResponsesUsage(
@@ -444,27 +535,14 @@ async function generateInterestingNewsWithWebSearch(
   sphereLabelText: string,
   moscowDay: string,
 ): Promise<{ text: string; usage: AiUsage }> {
-  const model = newsModel();
-  const response = await client.responses.create({
-    model,
-    instructions: buildNewsSystemPrompt(sphereLabelText),
-    input: buildNewsUserPrompt(sphereId, sphereLabelText, moscowDay),
-    tools: [buildNewsWebSearchTool()],
-    ...(config.NEWS_FORCE_WEB_SEARCH === 'true' ? { tool_choice: 'required' as const } : {}),
-    max_output_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
+  const params = buildNewsResponsesCreateParams(sphereId, sphereLabelText, moscowDay);
+  const response = await client.responses.create(params);
+  const text = assertNewsResponsesResult(response, {
+    forceWebSearch: config.NEWS_FORCE_WEB_SEARCH === 'true',
   });
-
-  if (config.NEWS_FORCE_WEB_SEARCH === 'true' && !responseHasWebSearchCall(response.output)) {
-    throw new Error('News web search was required but no web_search_call ran');
-  }
-
-  const content = response.output_text?.trim();
-  if (!content) throw new Error('Empty news model response');
-  const truncated = response.incomplete_details?.reason === 'max_output_tokens';
-  const text = content + (truncated ? '\n\nОтвет сокращён из-за ограничения длины.' : '');
   return {
     text,
-    usage: mapResponsesUsage(model, response.usage),
+    usage: mapResponsesUsage(params.model, response.usage),
   };
 }
 
@@ -478,13 +556,10 @@ async function generateInterestingNewsViaChatCompletions(
     ...chatCompletionModelOptions(model),
     max_completion_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
     messages: [
-      { role: 'system', content: buildNewsSystemPrompt(sphereLabelText) },
+      { role: 'system', content: buildNewsSystemPrompt(sphereLabelText, { webSearch: false }) },
       {
         role: 'user',
-        content:
-          `Сфера: ${sphereLabelText} (${sphereId}).\n` +
-          `Сегодня по Москве: ${moscowDay}.\n` +
-          'Пришли одну свежую интересную новость по этой сфере.',
+        content: buildNewsUserPrompt(sphereId, sphereLabelText, moscowDay, { webSearch: false }),
       },
     ],
   });
@@ -507,7 +582,7 @@ export async function generateInterestingNews(
   sphereLabelText: string,
 ): Promise<{ text: string; usage: AiUsage }> {
   const moscowDay = moscowDateString();
-  if (config.NEWS_WEB_SEARCH === 'true') {
+  if (newsUsesWebSearch()) {
     return generateInterestingNewsWithWebSearch(sphereId, sphereLabelText, moscowDay);
   }
   return generateInterestingNewsViaChatCompletions(sphereId, sphereLabelText, moscowDay);

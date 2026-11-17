@@ -101,9 +101,9 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | --- | --- | --- |
 | `OPENAI_MODEL` | `gpt-6-sol` | Модель Chat Completions; для `gpt-6*` бот ставит `reasoning_effort=none` (нужно для tool calling в @упоминаниях) |
 | `OPENAI_NEWS_MODEL` | пусто | Опциональная модель только для ежедневных новостей; пусто — тот же `OPENAI_MODEL` |
-| `OPENAI_TIMEOUT_MS` / `OPENAI_MAX_RETRIES` | `90000` / `1` | Таймаут и число повторов OpenAI SDK |
+| `OPENAI_TIMEOUT_MS` / `OPENAI_MAX_RETRIES` | `90000` / `1` | Таймаут и число повторов OpenAI SDK; для новостей с `web_search` часто нужно `120000+` |
 | `OPENAI_BASE_URL` | пусто | Опциональный совместимый endpoint; для новостей с веб-поиском прокси должен поддерживать `/v1/responses` и hosted `web_search` |
-| `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `2` / `10` | Оценка $ за 1M токенов для `/usage` |
+| `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `2` / `10` | Оценка $ за 1M токенов для `/usage` (токены новостей не включают отдельную цену `web_search`) |
 | `OPENAI_IMAGE_USD` | `0.011` | Оценка $ за одну сгенерированную картинку |
 | `USAGE_RETENTION_DAYS` | `90` | Срок хранения записей расходов OpenAI |
 | `GIPHY_API_KEY` | пусто | Ключ Giphy для `/gif` (без ключа команда недоступна) |
@@ -131,6 +131,8 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | `VIDEO_MAX_HEIGHT` / `VIDEO_FFMPEG_*` | `1080` / см. пример | Качество перекодирования видео |
 | `VIDEO_CACHE_SIZE` | `1000` | Сколько последних роликов помнить по `file_id` (0 — выключить) |
 | `GALLERY_MAX_DIMENSION` / `GALLERY_OUTPUT_MAX_MB` | `1920` / `10` | Размер JPEG для Telegram |
+
+`/usage` считает только input/output токены из ответа модели: отдельная цена hosted `web_search` туда не входит, поэтому оценка расходов на новости может быть занижена.
 
 При превышении объёма выбираются самые свежие сообщения, бот указывает ограничение в ответе. Если самое свежее сообщение само превышает лимит, оно обрезается. Выборка идёт по всей группе, включая темы форума. Расходы зависят от объёма и модели; лимит частоты не заменяет общий денежный бюджет. Повторные запросы оплачиваются заново. Неуспешный запрос также занимает интервал ожидания.
 
