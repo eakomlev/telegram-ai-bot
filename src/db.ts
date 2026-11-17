@@ -52,10 +52,12 @@ export async function initializeDatabase() {
       gallery_enabled BOOLEAN NOT NULL,
       media_cooldown_seconds INTEGER NOT NULL,
       sarcasm_level INTEGER NOT NULL DEFAULT 0,
+      response_tone TEXT NOT NULL DEFAULT 'gentleman',
       mention_enabled BOOLEAN NOT NULL DEFAULT true,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS sarcasm_level INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS response_tone TEXT NOT NULL DEFAULT 'gentleman';
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS mention_enabled BOOLEAN NOT NULL DEFAULT true;
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_enabled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE chat_settings ADD COLUMN IF NOT EXISTS news_spheres TEXT[] NOT NULL DEFAULT '{}';
@@ -303,6 +305,7 @@ export type ChatSettingsRow = {
   gallery_enabled: boolean;
   media_cooldown_seconds: number;
   sarcasm_level: number;
+  response_tone: string;
   mention_enabled: boolean;
   news_enabled: boolean;
   news_spheres: string[];
@@ -319,7 +322,7 @@ export type DueNewsChat = {
 export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRow | undefined> {
   const result = await pool.query<ChatSettingsRow>(
     `SELECT summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
-            sarcasm_level, mention_enabled, news_enabled, news_spheres, news_next_run_at, news_last_sent_on,
+            sarcasm_level, response_tone, mention_enabled, news_enabled, news_spheres, news_next_run_at, news_last_sent_on,
             auto_answer_enabled
      FROM chat_settings WHERE chat_id = $1`,
     [String(chatId)],
@@ -331,8 +334,8 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
   await pool.query(
     `INSERT INTO chat_settings (
       chat_id, summary_admin_only, default_message_count, video_enabled, gallery_enabled, media_cooldown_seconds,
-      sarcasm_level, mention_enabled, news_enabled, news_spheres, auto_answer_enabled, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+      sarcasm_level, response_tone, mention_enabled, news_enabled, news_spheres, auto_answer_enabled, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
     ON CONFLICT (chat_id) DO UPDATE SET
       summary_admin_only = EXCLUDED.summary_admin_only,
       default_message_count = EXCLUDED.default_message_count,
@@ -340,6 +343,7 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       gallery_enabled = EXCLUDED.gallery_enabled,
       media_cooldown_seconds = EXCLUDED.media_cooldown_seconds,
       sarcasm_level = EXCLUDED.sarcasm_level,
+      response_tone = EXCLUDED.response_tone,
       mention_enabled = EXCLUDED.mention_enabled,
       news_enabled = EXCLUDED.news_enabled,
       news_spheres = EXCLUDED.news_spheres,
@@ -353,6 +357,7 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
       row.gallery_enabled,
       row.media_cooldown_seconds,
       row.sarcasm_level,
+      row.response_tone,
       row.mention_enabled,
       row.news_enabled,
       row.news_spheres,

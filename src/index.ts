@@ -228,7 +228,12 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
     const failText = 'Не удалось составить саммари. Попробуйте позже; владельцу бота стоит проверить подключение, модель и баланс OpenAI.';
     const status = await ctx.reply(style === 'verse' ? '⏳ Сочиняю саммари в стихах…' : '⏳ Готовлю саммари…');
     try {
-      const { text: summary, usage } = await summarize(prepared.json, settings.sarcasmLevel, style);
+      const { text: summary, usage } = await summarize(
+        prepared.json,
+        settings.sarcasmLevel,
+        style,
+        settings.responseTone,
+      );
       await recordOpenAiUsage(ctx.chat!.id, {
         kind: 'summary',
         model: usage.model,

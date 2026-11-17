@@ -2,10 +2,12 @@ import { InlineKeyboard, type Context } from 'grammy';
 import {
   cycleDefaultCount,
   cycleMediaCooldown,
+  cycleResponseTone,
   cycleSarcasmLevel,
   defaultChatSettings,
   formatSettings,
   resolveChatSettings,
+  responseToneLabel,
   saveChatSettings,
   type ChatSettings,
 } from './chat-settings.js';
@@ -36,6 +38,8 @@ function settingsKeyboard(settings: ChatSettings) {
     .text(`Число сообщений: ${settings.defaultMessageCount}`, `${PREFIX}count`)
     .row()
     .text(`Сарказм: ${settings.sarcasmLevel}%`, `${PREFIX}sarcasm`)
+    .row()
+    .text(`Тон: ${responseToneLabel(settings.responseTone)}`, `${PREFIX}tone`)
     .row()
     .text(`${on(settings.mentionEnabled)} Ответы на @упоминания`, `${PREFIX}mention`)
     .row()
@@ -111,6 +115,11 @@ async function applyAction(
       return saveChatSettings(chatId, {
         ...settings,
         sarcasmLevel: cycleSarcasmLevel(settings.sarcasmLevel),
+      });
+    case 'tone':
+      return saveChatSettings(chatId, {
+        ...settings,
+        responseTone: cycleResponseTone(settings.responseTone),
       });
     case 'mention':
       return saveChatSettings(chatId, { ...settings, mentionEnabled: !settings.mentionEnabled });

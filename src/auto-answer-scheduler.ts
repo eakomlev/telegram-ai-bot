@@ -1,7 +1,7 @@
 import type { Api } from 'grammy';
 import { replyToUnansweredQuestion } from './ai.js';
 import { trimPrecedingContext, type ChatContextMessage } from './chat-context.js';
-import { resolveChatSettings } from './chat-settings.js';
+import { resolveChatSettings, type ResponseTone } from './chat-settings.js';
 import { allowedChatIds, config } from './config.js';
 import {
   claimPendingAutoAnswer,
@@ -80,7 +80,12 @@ async function loadAutoAnswerContext(row: PendingAutoAnswer): Promise<ChatContex
   }
 }
 
-async function ensureAnswerText(row: PendingAutoAnswer, lease: Date, sarcasmLevel: number): Promise<string | undefined> {
+async function ensureAnswerText(
+  row: PendingAutoAnswer,
+  lease: Date,
+  sarcasmLevel: number,
+  responseTone: ResponseTone,
+): Promise<string | undefined> {
   // Send retry: answer_text already set — skip OpenAI and context reload.
   if (!needsOpenAiGeneration(row.answerText)) return row.answerText!.trim();
 
@@ -94,6 +99,7 @@ async function ensureAnswerText(row: PendingAutoAnswer, lease: Date, sarcasmLeve
       row.author,
       sarcasmLevel,
       contextMessages,
+      responseTone,
     ));
   } catch (error) {
     console.error('Auto-answer OpenAI failed', {
@@ -129,7 +135,7 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer) {
     return;
   }
 
-  const answer = await ensureAnswerText(row, lease, settings.sarcasmLevel);
+  const answer = await ensureAnswerText(row, lease, settings.sarcasmLevel, settings.responseTone);
   if (!answer) return;
 
   // claimed → sending (still cancelable). Terminal answered only after Telegram ACK.
