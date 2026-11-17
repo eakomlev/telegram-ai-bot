@@ -15,6 +15,7 @@ import { moscowDateString, moscowParts, pickRandomNewsRunAt, zonedMoscowTime } f
 import { postNewsToChat } from './news.js';
 
 let newsTimer: NodeJS.Timeout | undefined;
+let runningTick: Promise<void> | undefined;
 
 const NEWS_CLAIM_LEASE_MS = 3 * 60_000;
 const RESCHEDULE_ATTEMPTS = 3;
@@ -85,16 +86,26 @@ export async function scheduleNewsIfNeeded(chatId: number, settings?: ChatSettin
   }
 }
 
-export async function runNewsSchedulerTick(api: Api, now = new Date()) {
+export function runNewsSchedulerTick(api: Api, now = new Date()): Promise<void> {
+  if (runningTick) return runningTick;
+  const startedAt = Date.now();
+  const clock = () => new Date(now.getTime() + Date.now() - startedAt);
+  const job = runTick(api, now, clock).finally(() => { runningTick = undefined; });
+  runningTick = job;
+  return job;
+}
+
+async function runTick(api: Api, now: Date, clock: () => Date) {
   if (config.NEWS_ENABLED !== 'true') return;
   let due = await listDueNewsChats(now);
   if (allowedChatIds.size) {
     due = due.filter((row) => allowedChatIds.has(String(row.chatId)));
   }
-  const moscowDate = moscowDateString(now);
   for (const chat of due) {
-    const leaseUntil = newsClaimLeaseUntil(now);
-    const claimed = await claimNewsSend(chat.chatId, moscowDate, leaseUntil, now);
+    const claimedAt = clock();
+    const moscowDate = moscowDateString(claimedAt);
+    const leaseUntil = newsClaimLeaseUntil(claimedAt);
+    const claimed = await claimNewsSend(chat.chatId, moscowDate, leaseUntil, claimedAt);
     if (!claimed) continue;
     try {
       await postNewsToChat(api, chat.chatId, claimed.newsSpheres);
@@ -115,7 +126,7 @@ export async function runNewsSchedulerTick(api: Api, now = new Date()) {
         continue;
       }
       try {
-        await rescheduleNewsRunWithRetry(chat.chatId, softRetryAt(now));
+        await rescheduleNewsRunWithRetry(chat.chatId, softRetryAt(clock()));
       } catch {
         // next_run stays on the short claim lease and becomes due again after it expires
       }
@@ -124,7 +135,7 @@ export async function runNewsSchedulerTick(api: Api, now = new Date()) {
 
     // Send already succeeded — never soft-retry another generation/post if only mark fails.
     try {
-      await markNewsSentWithRetry(chat.chatId, moscowDate, nextDayNewsRunAt(now));
+      await markNewsSentWithRetry(chat.chatId, moscowDate, nextDayNewsRunAt(clock()));
     } catch (error) {
       console.error('Daily news mark-sent failed after delivery', {
         chatId: chat.chatId,
@@ -171,8 +182,8 @@ export function startNewsScheduler(api: Api) {
   tick();
 }
 
-export function stopNewsScheduler() {
-  if (!newsTimer) return;
-  clearInterval(newsTimer);
+export async function stopNewsScheduler() {
+  if (newsTimer) clearInterval(newsTimer);
   newsTimer = undefined;
+  await runningTick;
 }

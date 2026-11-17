@@ -41,14 +41,37 @@ test('caption contains metadata, bounded description and always preserves source
 
 test('process runner does not interpret shell metacharacters', async () => {
   const value = '$(echo dangerous); echo other';
-  assert.equal(await runProcess('/bin/echo', [value], 2000), value + '\n');
+  assert.equal(await runProcess(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', value], 2000), value);
 });
 
-test('process runner rejects failures, timeout and cancellation', async () => {
-  await assert.rejects(runProcess('/bin/false', [], 2000));
-  await assert.rejects(runProcess('/bin/sleep', ['5'], 50));
+test('process runner rejects nonzero exit', async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'process.exit(7)'], 2000), /process failed/);
+});
+
+test('process runner terminates a real process on timeout', async () => {
+  const started = Date.now();
+  await assert.rejects(runProcess(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], 100), /timed out/);
+  assert.ok(Date.now() - started < 5000, 'timeout must terminate before natural exit');
+});
+
+test('process runner terminates a real process on cancellation', async () => {
   const controller = new AbortController();
-  const job = runProcess('/bin/sleep', ['5'], 2000, controller.signal);
-  controller.abort();
-  await assert.rejects(job);
+  const started = Date.now();
+  const job = runProcess(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], 15000, controller.signal);
+  const timer = setTimeout(() => controller.abort(), 100);
+  try { await assert.rejects(job, /cancelled/); }
+  finally { clearTimeout(timer); }
+  assert.ok(Date.now() - started < 5000, 'abort must terminate before natural exit');
+});
+
+test('process runner terminates on excessive stdout', async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'process.stdout.write(Buffer.alloc(5 * 1024 * 1024)); setTimeout(() => {}, 10000)'], 5000), /output limit/);
+});
+
+
+test('process timeout also terminates descendants holding stdout open', async () => {
+  const started = Date.now();
+  const script = "const {spawn}=require('node:child_process'); spawn(process.execPath, ['-e','setTimeout(()=>{},10000)'], {stdio:['ignore','inherit','inherit']}); setTimeout(()=>{},10000);";
+  await assert.rejects(runProcess(process.execPath, ['-e', script], 400), /timed out/);
+  assert.ok(Date.now() - started < 5000, 'descendant must not retain the process pipes');
 });

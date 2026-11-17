@@ -64,12 +64,15 @@ export async function runGifReaction(ctx: Context) {
   const status = await ctx.reply('⏳ Смотрю переписку и ищу смешную GIF…');
   const failText = 'Не удалось подобрать GIF. Попробуйте позже или уменьшите N.';
   const connection = await pool.connect();
+  let released = false;
   try {
     const rows = await selectMessages(chatId, selection, ctx.msg!.message_id, connection);
     if (!rows.length) {
       await ctx.api.editMessageText(chatId, status.message_id, 'Пока нет сохранённых сообщений. Проверьте Privacy Mode в @BotFather.');
       return;
     }
+    connection.release();
+    released = true;
     const prepared = prepareMessages(rows, config.GIF_MAX_INPUT_CHARS);
     if (!prepared.count) throw new Error('Input cannot fit text budget');
 
@@ -98,6 +101,6 @@ export async function runGifReaction(ctx: Context) {
     console.error('GIF reaction failed', { chatId });
     await ctx.api.editMessageText(chatId, status.message_id, failText).catch(() => ctx.reply(failText));
   } finally {
-    connection.release();
+    if (!released) connection.release();
   }
 }

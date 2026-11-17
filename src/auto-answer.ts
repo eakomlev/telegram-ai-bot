@@ -9,6 +9,7 @@ import { resolveChatSettings } from './chat-settings.js';
 import { config } from './config.js';
 import {
   cancelPendingAutoAnswersForScope,
+  markPendingAutoAnswerStatus,
   enqueuePendingAutoAnswer,
 } from './db.js';
 import { parseGalleryLink } from './gallery-utils.js';
@@ -198,4 +199,10 @@ export async function maybeEnqueueAutoAnswer(ctx: Context) {
       message: error instanceof Error ? error.message : String(error),
     });
   });
+}
+
+/** Editing invalidates the snapshot used by a queued or generating answer. */
+export async function cancelAutoAnswerForEdit(message: Message) {
+  if (message.from?.is_bot && !message.sender_chat) return;
+  await markPendingAutoAnswerStatus(message.chat.id, message.message_id, 'cancelled');
 }

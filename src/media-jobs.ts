@@ -16,13 +16,13 @@ export async function enqueueMedia(
   if (closing || !ctx.chat) return;
   const now = Date.now();
   const cooldown = options.cooldownSeconds ?? config.MEDIA_COOLDOWN_SECONDS ?? config.VIDEO_COOLDOWN_SECONDS;
-  for (const [id, time] of recent) if (now - time >= cooldown * 1000) recent.delete(id);
+  for (const [id, expiresAt] of recent) if (now >= expiresAt) recent.delete(id);
   if (recent.has(ctx.chat.id)) return;
   if (active.size >= (config.MEDIA_MAX_CONCURRENT ?? config.VIDEO_MAX_CONCURRENT)) {
     await ctx.reply('Загрузка медиа занята. Отправьте ссылку чуть позже.');
     return;
   }
-  recent.set(ctx.chat.id, now);
+  recent.set(ctx.chat.id, now + cooldown * 1000);
   const job = work();
   active.add(job);
   void job.then(() => active.delete(job), () => active.delete(job));

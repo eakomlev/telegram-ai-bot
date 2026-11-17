@@ -1,4 +1,5 @@
 import { Bot, type Context } from 'grammy';
+import { aiJobs, enqueueAi } from './ai-jobs.js';
 import { config, allowedChatIds, ownerUserId } from './config.js';
 import { resolveChatSettings } from './chat-settings.js';
 import {
@@ -25,7 +26,7 @@ import { formatOwnerUsageReport, formatUsageReport } from './usage.js';
 import { runDailyMemberSnapshots } from './chat-members.js';
 
 import { runGifReaction } from './gif.js';
-import { cancelPendingAutoAnswersForActivity, maybeEnqueueAutoAnswer } from './auto-answer.js';
+import { cancelPendingAutoAnswersForActivity, cancelAutoAnswerForEdit, maybeEnqueueAutoAnswer } from './auto-answer.js';
 import { startAutoAnswerScheduler, stopAutoAnswerScheduler } from './auto-answer-scheduler.js';
 import { maybeHandleMention, setBotIdentity } from './mention.js';
 import { maybeRepostVideo } from './video.js';
@@ -80,6 +81,7 @@ async function chatUsageLabel(chatId: number) {
 }
 
 bot.use(async (ctx, next) => {
+  if (stopping) return;
   if (ctx.chat?.type === 'private') {
     const text = ctx.message?.text ?? '';
     if (isBotOwner(ctx) && /^\/stats(?:@\w+)?(?:\s|$)/i.test(text)) {
@@ -207,16 +209,9 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
       return;
     }
   }
-  // Dedicated session keeps the advisory lock through DB reads and the model request.
   const connection = await pool.connect();
-  let locked = false;
+  let released = false;
   try {
-    const lock = await connection.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1::bigint) AS locked', [String(ctx.chat!.id)]);
-    locked = lock.rows[0]?.locked === true;
-    if (!locked) {
-      await ctx.reply('Саммари для этой группы уже готовится.');
-      return;
-    }
     const rows = await selectMessages(ctx.chat!.id, selection, ctx.msg!.message_id, connection);
     if (!rows.length) {
       await ctx.reply('Пока нет сохранённых сообщений за этот период. Проверьте Privacy Mode в @BotFather.');
@@ -226,6 +221,8 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
       await ctx.reply(`Слишком частые запросы. Между саммари нужно подождать ${config.SUMMARY_COOLDOWN_SECONDS} сек.`);
       return;
     }
+    connection.release();
+    released = true;
     const prepared = prepareMessages(rows, config.MAX_INPUT_CHARS);
     if (!prepared.count) throw new Error('Input cannot fit text budget');
     const failText = 'Не удалось составить саммари. Попробуйте позже; владельцу бота стоит проверить подключение, модель и баланс OpenAI.';
@@ -255,21 +252,20 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
     console.error('Summary request failed', { chatId: ctx.chat!.id, style });
     await ctx.reply('Не удалось составить саммари. Попробуйте позже; владельцу бота стоит проверить подключение, модель и баланс OpenAI.');
   } finally {
-    if (locked) {
-      try { await connection.query('SELECT pg_advisory_unlock($1::bigint)', [String(ctx.chat!.id)]); }
-      catch { connection.release(true); return; }
-    }
-    connection.release();
+    if (!released) connection.release();
   }
 }
 
-bot.command('summary', (ctx) => runSummary(ctx, 'plain'));
-bot.command('verse', (ctx) => runSummary(ctx, 'verse'));
-bot.command('gif', (ctx) => runGifReaction(ctx));
+bot.command('summary', (ctx) => enqueueAi(ctx, () => runSummary(ctx, 'plain')));
+bot.command('verse', (ctx) => enqueueAi(ctx, () => runSummary(ctx, 'verse')));
+bot.command('gif', (ctx) => enqueueAi(ctx, () => runGifReaction(ctx)));
 
 async function store(ctx: Context) {
   const message = ctx.message ?? ctx.editedMessage;
   if (!message || (message.from?.is_bot && !message.sender_chat)) return;
+  if (ctx.editedMessage) {
+    await cancelAutoAnswerForEdit(message);
+  }
   const text = message.text ?? message.caption;
   if (!text || /^\/[\w]+(?:@\w+)?(?:\s|$)/.test(text)) {
     if (ctx.editedMessage) await deleteMessage(message.chat.id, message.message_id);
@@ -291,18 +287,20 @@ async function store(ctx: Context) {
     await maybeRepostGallery(ctx);
   }
 }
-bot.on(['message:text', 'message:caption', 'edited_message:text', 'edited_message:caption'], store);
+bot.on(['message:text', 'message:caption', 'edited_message'], store);
 bot.catch(() => console.error('Telegram update failed'));
 
 async function shutdown() {
   if (stopping) return;
   stopping = true;
   if (cleanupTimer) clearInterval(cleanupTimer);
-  stopNewsScheduler();
-  stopAutoAnswerScheduler();
-  await stopMediaJobs();
-  if (bot.isRunning()) await bot.stop();
-  await pool.end();
+  const draining = Promise.allSettled([stopNewsScheduler(), stopAutoAnswerScheduler(), aiJobs.stop(), stopMediaJobs()]);
+  try {
+    if (bot.isRunning()) await bot.stop();
+  } finally {
+    await draining;
+    await pool.end();
+  }
 }
 process.once('SIGINT', () => { void shutdown(); });
 process.once('SIGTERM', () => { void shutdown(); });

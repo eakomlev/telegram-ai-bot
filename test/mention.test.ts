@@ -273,3 +273,14 @@ test('getBotAuthorLabel uses @username when identity is set', async () => {
   setBotIdentity(42, 'Summary_Bot');
   assert.equal(getBotAuthorLabel(), '@summary_bot');
 });
+
+
+test('long quotes never displace the current request and stay within budget', () => {
+  const request = 'REQUEST_' + 'r'.repeat(1450);
+  const prompt = buildMentionPrompt(request, { author: 'A', text: 'q'.repeat(3000) }, 1500);
+  assert.ok(prompt.includes(request));
+  assert.ok(prompt.length <= 1500);
+  const oversized = buildMentionPrompt('REQUEST_' + 'r'.repeat(3000), { author: 'A', text: 'q'.repeat(3000) }, 1500);
+  assert.ok(oversized.includes('REQUEST_'));
+  assert.ok(oversized.length <= 1500);
+});

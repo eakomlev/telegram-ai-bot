@@ -78,3 +78,22 @@ export function splitReply(text: string, maxLength = 4000): string[] {
   if (remaining) parts.push(remaining);
   return parts;
 }
+
+/** Truncate without splitting emoji, including the marker in the character budget. */
+export function truncateText(text: string, maxChars: number, marker = '…'): string {
+  if (maxChars <= 0) return '';
+  if (text.length <= maxChars) return text;
+  const suffix = marker.slice(0, maxChars);
+  let cut = maxChars - suffix.length;
+  const code = text.charCodeAt(cut - 1);
+  if (code >= 0xd800 && code <= 0xdbff) cut--;
+  return text.slice(0, cut) + suffix;
+}
+
+/** Caption and follow-up messages together preserve the entire response. */
+export function splitCaptionReply(text: string, captionLength: number, messageLength: number) {
+  let cut = Math.min(text.length, captionLength);
+  const code = text.charCodeAt(cut - 1);
+  if (cut < text.length && code >= 0xd800 && code <= 0xdbff) cut--;
+  return { caption: text.slice(0, cut), messages: splitReply(text.slice(cut), messageLength) };
+}

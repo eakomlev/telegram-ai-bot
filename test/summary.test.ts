@@ -32,3 +32,15 @@ test('splits Telegram responses without losing text or breaking emoji', () => {
   assert.equal(parts.join(''), text);
   assert.ok(parts.every((part) => part.length <= 4000 && !/[\uD800-\uDBFF]$/.test(part)));
 });
+
+
+test('caption splitting preserves all text and emoji at the caption boundary', async () => {
+  const { splitCaptionReply } = await import('../src/summary.js');
+  for (const value of ['x'.repeat(2000), 'x'.repeat(1023) + '😀' + 'y'.repeat(5000)]) {
+    const { caption, messages } = splitCaptionReply(value, 1024, 4000);
+    assert.equal(caption + messages.join(''), value);
+    assert.ok(caption.length <= 1024);
+    assert.ok(messages.every((message) => message.length <= 4000));
+    assert.ok(!/[\uD800-\uDBFF]$/.test(caption));
+  }
+});

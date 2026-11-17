@@ -9,7 +9,8 @@ import {
 import { resolveChatSettings } from './chat-settings.js';
 import { config } from './config.js';
 import { persistBotMessage, recordOpenAiUsage, selectPrecedingMessages } from './db.js';
-import { splitReply } from './summary.js';
+import { splitReply, splitCaptionReply, truncateText } from './summary.js';
+import { enqueueAi } from './ai-jobs.js';
 import { startStatus } from './status.js';
 
 let botIdentity: { id: number; username: string } | undefined;
@@ -134,7 +135,7 @@ function withPrecedingContext(
   maxChars: number,
   contextHeader: string,
 ): string {
-  if (body.length > maxChars) return `${body.slice(0, maxChars)}…`;
+  if (body.length > maxChars) return truncateText(body, maxChars);
   const contextLines = preceding
     .map(formatContextLine)
     .filter((line) => !/^\[.+\]:\s*$/.test(line));
@@ -160,7 +161,7 @@ function withPrecedingContext(
   if (!contextBody.trim()) return body;
 
   const result = `${contextHeader}${contextBody}${separator}${body}`;
-  return result.length > maxChars ? `${result.slice(0, maxChars)}…` : result;
+  return result.length > maxChars ? truncateText(result, maxChars) : result;
 }
 
 /**
@@ -180,10 +181,10 @@ export function buildMentionPrompt(
 
   if (!quoted) {
     const body = preceding.length ? `Запрос:\n${request}` : request;
-    const capped = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
+    const capped = body.length > maxChars ? truncateText(body, maxChars) : body;
     // Barely room for a labeled request — skip preceding.
     if (preceding.length && maxChars - capped.length < 20) {
-      return request.length > maxChars ? `${request.slice(0, maxChars)}…` : request;
+      return request.length > maxChars ? truncateText(request, maxChars) : request;
     }
     return withPrecedingContext(
       capped,
@@ -198,10 +199,13 @@ export function buildMentionPrompt(
   const budget = maxChars - header.length - footer.length;
   // Quote+request barely fit — omit preceding entirely (same compact path as before).
   if (budget < 40) {
-    const compact = `Цитата: ${quoted.text}\n\nЗапрос: ${request}`;
-    return compact.length > maxChars ? `${compact.slice(0, maxChars)}…` : compact;
+    const requestBody = truncateText(`Запрос: ${request}`, maxChars);
+    const quoteBudget = maxChars - requestBody.length - '\n\nЦитата: '.length;
+    return quoteBudget > 0
+      ? `Цитата: ${truncateText(quoted.text, quoteBudget)}\n\n${requestBody}`
+      : requestBody;
   }
-  const quote = quoted.text.length > budget ? `${quoted.text.slice(0, budget)}…` : quoted.text;
+  const quote = quoted.text.length > budget ? truncateText(quoted.text, budget) : quoted.text;
   const quoteAndRequest = `${header}${quote}${footer}`;
   return withPrecedingContext(
     quoteAndRequest,
@@ -293,105 +297,111 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     return true;
   }
 
-  let preceding: ChatContextMessage[] = [];
-  if (config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
-    // With a quote, anchor before the quoted message; otherwise before the mention itself.
-    const replyTo = quoted ? ctx.message.reply_to_message : undefined;
-    const anchor = replyTo ?? ctx.message;
+  const message = ctx.message;
+  const chat = ctx.chat;
+  const accepted = await enqueueAi(ctx, async () => {
+    let preceding: ChatContextMessage[] = [];
+    if (config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
+      // With a quote, anchor before the quoted message; otherwise before the mention itself.
+      const replyTo = quoted ? message.reply_to_message : undefined;
+      const anchor = replyTo ?? message;
+      try {
+        const rows = await selectPrecedingMessages({
+          chatId: chat.id,
+          beforeMessageId: anchor.message_id,
+          beforeSentAt: new Date(anchor.date * 1000),
+          messageThreadId: anchor.message_thread_id ?? message.message_thread_id ?? null,
+          lookbackMinutes: config.MENTION_CONTEXT_LOOKBACK_MINUTES,
+          maxMessages: config.MENTION_CONTEXT_MAX_MESSAGES,
+        });
+        preceding = trimPrecedingContext(
+          rows.map((message) => ({ author: message.author, text: message.text })),
+          config.MENTION_CONTEXT_MAX_CHARS,
+        );
+      } catch (error) {
+        console.error('Mention context load failed', {
+          chatId: chat.id,
+          messageId: anchor.message_id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const prompt = buildMentionPrompt(
+      userText,
+      quoted,
+      config.MENTION_MAX_INPUT_CHARS,
+      fileIds.length > 0,
+      preceding,
+    );
+
+    const reply = {
+      reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true },
+      ...(message.message_thread_id ? { message_thread_id: message.message_thread_id } : {}),
+    };
+    const memeMode = isMemeRequest(userText);
+    const status = await startStatus(ctx, memeMode ? '⏳ Делаю мем…' : '⏳ Думаю…', reply);
     try {
-      const rows = await selectPrecedingMessages({
-        chatId: ctx.chat.id,
-        beforeMessageId: anchor.message_id,
-        beforeSentAt: new Date(anchor.date * 1000),
-        messageThreadId: anchor.message_thread_id ?? ctx.message.message_thread_id ?? null,
-        lookbackMinutes: config.MENTION_CONTEXT_LOOKBACK_MINUTES,
-        maxMessages: config.MENTION_CONTEXT_MAX_MESSAGES,
+      const inputImages = await downloadTelegramImages(ctx.api, fileIds);
+      const result = await replyToMention(prompt || 'Опиши и прокомментируй изображение(я).', {
+        sarcasmLevel: settings.sarcasmLevel,
+        imagesEnabled: config.MENTION_IMAGES_ENABLED === 'true',
+        maxImages: config.MENTION_MAX_IMAGES,
+        maxOutputTokens: config.MENTION_MAX_OUTPUT_TOKENS,
+        inputImages,
+        memeMode,
       });
-      preceding = trimPrecedingContext(
-        rows.map((message) => ({ author: message.author, text: message.text })),
-        config.MENTION_CONTEXT_MAX_CHARS,
-      );
-    } catch (error) {
-      console.error('Mention context load failed', {
-        chatId: ctx.chat.id,
-        messageId: anchor.message_id,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const chatId = chat.id;
+      await recordOpenAiUsage(chatId, {
+        kind: 'mention',
+        model: result.usage.model,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        imageCount: result.usage.imageCount,
+        estimatedCostUsd: result.usage.estimatedCostUsd,
+      }).catch(() => console.error('OpenAI usage record failed', { chatId, kind: 'mention' }));
+      const parts = splitReply(result.text.trim() || ' ', config.TELEGRAM_MAX_MESSAGE_LENGTH);
+      const mediaText = splitCaptionReply(result.text.trim(), config.TELEGRAM_MAX_CAPTION_LENGTH, config.TELEGRAM_MAX_MESSAGE_LENGTH);
+      const preview = { link_preview_options: { is_disabled: true as const } };
+
+      if (result.images.length === 1) {
+        const photo = await ctx.replyWithPhoto(new InputFile(result.images[0]!, 'image.png'), {
+          ...reply,
+          caption: mediaText.caption,
+        });
+        await persistSentBotReply(chatId, photo);
+        for (const part of mediaText.messages) {
+          const sent = await ctx.reply(part, { ...reply, ...preview });
+          await persistSentBotReply(chatId, sent);
+        }
+      } else if (result.images.length > 1) {
+        const album = await ctx.replyWithMediaGroup(
+          result.images.map((buffer, index) => ({
+            type: 'photo' as const,
+            media: new InputFile(buffer, `image-${index}.png`),
+            ...(index === 0 ? { caption: mediaText.caption } : {}),
+          })),
+          reply,
+        );
+        await persistSentBotReply(chatId, album[0]);
+        for (const part of mediaText.messages) {
+          const sent = await ctx.reply(part, { ...reply, ...preview });
+          await persistSentBotReply(chatId, sent);
+        }
+      } else {
+        const first = await ctx.reply(parts[0]!, { ...reply, ...preview });
+        await persistSentBotReply(chatId, first);
+        for (const part of parts.slice(1)) {
+          const sent = await ctx.reply(part, { ...reply, ...preview });
+          await persistSentBotReply(chatId, sent);
+        }
+      }
+      await status.clear();
+    } catch {
+      console.error('Mention reply failed', { chatId: chat.id });
+      await status.fail('Не удалось ответить. Попробуйте позже или проверьте баланс OpenAI.');
     }
-  }
-
-  const prompt = buildMentionPrompt(
-    userText,
-    quoted,
-    config.MENTION_MAX_INPUT_CHARS,
-    fileIds.length > 0,
-    preceding,
-  );
-
-  const reply = {
-    reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-    ...(ctx.message.message_thread_id ? { message_thread_id: ctx.message.message_thread_id } : {}),
-  };
-  const memeMode = isMemeRequest(userText);
-  const status = await startStatus(ctx, memeMode ? '⏳ Делаю мем…' : '⏳ Думаю…', reply);
-  try {
-    const inputImages = await downloadTelegramImages(ctx.api, fileIds);
-    const result = await replyToMention(prompt || 'Опиши и прокомментируй изображение(я).', {
-      sarcasmLevel: settings.sarcasmLevel,
-      imagesEnabled: config.MENTION_IMAGES_ENABLED === 'true',
-      maxImages: config.MENTION_MAX_IMAGES,
-      maxOutputTokens: config.MENTION_MAX_OUTPUT_TOKENS,
-      inputImages,
-      memeMode,
-    });
-    const chatId = ctx.chat.id;
-    await recordOpenAiUsage(chatId, {
-      kind: 'mention',
-      model: result.usage.model,
-      promptTokens: result.usage.promptTokens,
-      completionTokens: result.usage.completionTokens,
-      imageCount: result.usage.imageCount,
-      estimatedCostUsd: result.usage.estimatedCostUsd,
-    }).catch(() => console.error('OpenAI usage record failed', { chatId, kind: 'mention' }));
-    const parts = splitReply(result.text.trim() || ' ', config.TELEGRAM_MAX_MESSAGE_LENGTH);
-    const preview = { link_preview_options: { is_disabled: true as const } };
-
-    if (result.images.length === 1) {
-      const photo = await ctx.replyWithPhoto(new InputFile(result.images[0]!, 'image.png'), {
-        ...reply,
-        caption: parts[0]!.slice(0, config.TELEGRAM_MAX_CAPTION_LENGTH),
-      });
-      await persistSentBotReply(chatId, photo);
-      for (const part of parts.slice(1)) {
-        const sent = await ctx.reply(part, { ...reply, ...preview });
-        await persistSentBotReply(chatId, sent);
-      }
-    } else if (result.images.length > 1) {
-      const album = await ctx.replyWithMediaGroup(
-        result.images.map((buffer, index) => ({
-          type: 'photo' as const,
-          media: new InputFile(buffer, `image-${index}.png`),
-          ...(index === 0 ? { caption: parts[0]!.slice(0, config.TELEGRAM_MAX_CAPTION_LENGTH) } : {}),
-        })),
-        reply,
-      );
-      await persistSentBotReply(chatId, album[0]);
-      for (const part of parts.slice(1)) {
-        const sent = await ctx.reply(part, { ...reply, ...preview });
-        await persistSentBotReply(chatId, sent);
-      }
-    } else {
-      const first = await ctx.reply(parts[0]!, { ...reply, ...preview });
-      await persistSentBotReply(chatId, first);
-      for (const part of parts.slice(1)) {
-        const sent = await ctx.reply(part, { ...reply, ...preview });
-        await persistSentBotReply(chatId, sent);
-      }
-    }
-    await status.clear();
-  } catch {
-    console.error('Mention reply failed', { chatId: ctx.chat.id });
-    await status.fail('Не удалось ответить. Попробуйте позже или проверьте баланс OpenAI.');
-  }
+  });
+  if (!accepted) recentMentions.delete(chat.id);
   return true;
 }

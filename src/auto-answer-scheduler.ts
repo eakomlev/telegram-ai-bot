@@ -7,7 +7,6 @@ import {
   claimPendingAutoAnswer,
   isCancelableAutoAnswerStatus,
   markPendingAutoAnswerSending,
-  markPendingAutoAnswerStatus,
   markPendingAutoAnswerStatusWithClaim,
   markSendingAutoAnswerAnswered,
   markSendingAutoAnswerFailed,
@@ -23,6 +22,7 @@ import { getBotAuthorLabel } from './mention.js';
 import { isPermanentTelegramDeliveryError } from './news-scheduler.js';
 
 let autoAnswerTimer: NodeJS.Timeout | undefined;
+let runningTick: Promise<void> | undefined;
 
 export function autoAnswerClaimLeaseUntil(now = new Date()) {
   return new Date(now.getTime() + config.AUTO_ANSWER_CLAIM_LEASE_MS);
@@ -121,7 +121,7 @@ async function ensureAnswerText(row: PendingAutoAnswer, lease: Date, sarcasmLeve
   return body;
 }
 
-async function postAutoAnswer(api: Api, row: PendingAutoAnswer, now: Date) {
+async function postAutoAnswer(api: Api, row: PendingAutoAnswer) {
   const lease = claimLeaseOrThrow(row);
   const settings = await resolveChatSettings(row.chatId);
   if (!settings.autoAnswerEnabled || config.AUTO_ANSWER_ENABLED !== 'true') {
@@ -172,7 +172,7 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer, now: Date) {
       row.chatId,
       row.messageId,
       lease,
-      autoAnswerClaimLeaseUntil(now),
+      autoAnswerClaimLeaseUntil(),
     );
     if (!reclaimed) {
       console.error('Auto-answer send retry reclaim skipped (cancelled or lease lost)', {
@@ -193,26 +193,36 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer, now: Date) {
   }
 }
 
-export async function runAutoAnswerSchedulerTick(api: Api, now = new Date()) {
+export function runAutoAnswerSchedulerTick(api: Api, now = new Date()): Promise<void> {
+  if (runningTick) return runningTick;
+  const startedAt = Date.now();
+  const clock = () => new Date(now.getTime() + Date.now() - startedAt);
+  const job = runTick(api, now, clock).finally(() => { runningTick = undefined; });
+  runningTick = job;
+  return job;
+}
+
+async function runTick(api: Api, now: Date, clock: () => Date) {
   if (config.AUTO_ANSWER_ENABLED !== 'true') return;
   let due = await listDuePendingAutoAnswers(now);
   if (allowedChatIds.size) {
     due = due.filter((row) => allowedChatIds.has(String(row.chatId)));
   }
   for (const row of due) {
-    const leaseUntil = autoAnswerClaimLeaseUntil(now);
-    const claimed = await claimPendingAutoAnswer(row.chatId, row.messageId, leaseUntil, now);
+    const claimedAt = clock();
+    const leaseUntil = autoAnswerClaimLeaseUntil(claimedAt);
+    const claimed = await claimPendingAutoAnswer(row.chatId, row.messageId, leaseUntil, claimedAt);
     if (!claimed) continue;
     try {
-      await postAutoAnswer(api, claimed, now);
+      await postAutoAnswer(api, claimed);
     } catch (error) {
       console.error('Auto-answer tick item failed', {
         chatId: claimed.chatId,
         messageId: claimed.messageId,
         message: error instanceof Error ? error.message : String(error),
       });
-      // Covers claimed and cancelable sending left mid-flight.
-      await markPendingAutoAnswerStatus(claimed.chatId, claimed.messageId, 'failed').catch(() => {});
+      // Only this claim may fail; a newer owner must remain untouched.
+      await markPendingAutoAnswerStatusWithClaim(claimed.chatId, claimed.messageId, claimLeaseOrThrow(claimed), 'failed').catch(() => {});
     }
   }
 }
@@ -228,8 +238,8 @@ export function startAutoAnswerScheduler(api: Api) {
   tick();
 }
 
-export function stopAutoAnswerScheduler() {
-  if (!autoAnswerTimer) return;
-  clearInterval(autoAnswerTimer);
+export async function stopAutoAnswerScheduler() {
+  if (autoAnswerTimer) clearInterval(autoAnswerTimer);
   autoAnswerTimer = undefined;
+  await runningTick;
 }
