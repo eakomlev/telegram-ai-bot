@@ -1,4 +1,5 @@
-import { Bot, type Context } from 'grammy';
+import { access } from 'node:fs/promises';
+import { Bot, InputFile, type Context } from 'grammy';
 import { config, allowedChatIds, ownerUserId } from './config.js';
 import { resolveChatSettings } from './chat-settings.js';
 import {
@@ -32,6 +33,12 @@ import { maybeRepostVideo } from './video.js';
 import { maybeRepostGallery } from './gallery.js';
 import { stopMediaJobs } from './media-jobs.js';
 import { startNewsScheduler, stopNewsScheduler } from './news-scheduler.js';
+import {
+  botDescription,
+  botShortDescription,
+  privateWelcome,
+  welcomeImagePath,
+} from './bot-profile.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -69,6 +76,16 @@ function isBotOwner(ctx: Context) {
   return Boolean(ownerUserId && ctx.from?.id === ownerUserId && !ctx.msg?.sender_chat);
 }
 
+async function replyPrivateWelcome(ctx: Context) {
+  try {
+    await access(welcomeImagePath);
+    await ctx.replyWithPhoto(new InputFile(welcomeImagePath), { caption: privateWelcome });
+  } catch (error) {
+    console.error('Welcome image unavailable; sending text only', error);
+    await ctx.reply(privateWelcome);
+  }
+}
+
 async function chatUsageLabel(chatId: number) {
   try {
     const chat = await bot.api.getChat(chatId);
@@ -82,6 +99,10 @@ async function chatUsageLabel(chatId: number) {
 bot.use(async (ctx, next) => {
   if (ctx.chat?.type === 'private') {
     const text = ctx.message?.text ?? '';
+    if (/^\/(?:start|help)(?:@\w+)?(?:\s|$)/i.test(text)) {
+      await replyPrivateWelcome(ctx);
+      return;
+    }
     if (isBotOwner(ctx) && /^\/stats(?:@\w+)?(?:\s|$)/i.test(text)) {
       await next();
       return;
@@ -89,7 +110,7 @@ bot.use(async (ctx, next) => {
     if (text.startsWith('/')) {
       await ctx.reply(
         ownerUserId && isBotOwner(ctx)
-          ? 'В личке доступна только /stats — статистика OpenAI по всем группам.'
+          ? 'В личке: /start — описание бота, /stats — статистика OpenAI по всем группам.'
           : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
       );
     }
@@ -331,9 +352,21 @@ try {
   await bot.api.setMyCommands(groupCommands);
   await bot.api.setMyCommands(groupCommands, { scope: { type: 'all_group_chats' } });
   await bot.api.setMyCommands(
-    [{ command: 'stats', description: 'Расходы OpenAI по всем группам' }],
+    [
+      { command: 'start', description: 'Краткое описание бота' },
+      { command: 'help', description: 'Краткое описание бота' },
+      ...(ownerUserId
+        ? [{ command: 'stats', description: 'Расходы OpenAI по всем группам' }]
+        : []),
+    ],
     { scope: { type: 'all_private_chats' } },
   );
+  try {
+    await bot.api.setMyShortDescription(botShortDescription);
+    await bot.api.setMyDescription(botDescription);
+  } catch (error) {
+    console.error('Failed to update bot description profile; continuing startup', error);
+  }
   await bot.start({
     allowed_updates: ['message', 'edited_message', 'callback_query'],
     onStart: () => {
