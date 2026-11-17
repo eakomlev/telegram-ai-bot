@@ -452,21 +452,30 @@ export function buildNewsWebSearchTool() {
   };
 }
 
+/** Only gpt-6* Responses models get an explicit reasoning effort (avoids 400 on non-reasoning models). */
+export function newsResponsesReasoningOptions(model: string) {
+  if (/^gpt-6/i.test(model)) {
+    return { reasoning: { effort: 'low' as const } };
+  }
+  return {};
+}
+
 export function buildNewsResponsesCreateParams(
   sphereId: string,
   sphereLabelText: string,
   moscowDay: string,
 ) {
   const force = config.NEWS_FORCE_WEB_SEARCH === 'true';
+  const model = newsModel();
   return {
-    model: newsModel(),
+    model,
     instructions: buildNewsSystemPrompt(sphereLabelText, { webSearch: true }),
     input: buildNewsUserPrompt(sphereId, sphereLabelText, moscowDay, { webSearch: true }),
     tools: [buildNewsWebSearchTool()],
     ...(force ? { tool_choice: 'required' as const } : {}),
     max_output_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
     // Keep reasoning low so tool/reasoning tokens do not exhaust the news output budget.
-    reasoning: { effort: 'low' as const },
+    ...newsResponsesReasoningOptions(model),
   };
 }
 

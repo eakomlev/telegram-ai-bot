@@ -109,7 +109,7 @@ docker run --rm -v "$PWD/test:/tests:ro" --entrypoint sh telegram-ai-bot:test /t
 | `GIPHY_API_KEY` | пусто | Ключ Giphy для `/gif` (без ключа команда недоступна) |
 | `GIF_DEFAULT_MESSAGE_COUNT` / `GIF_MAX_MESSAGE_COUNT` | `40` / `80` | Сколько сообщений смотреть для GIF-реакции |
 | `NEWS_ENABLED` | `true` | Глобально включить ежедневные новости в группах с настройкой |
-| `NEWS_MAX_OUTPUT_TOKENS` / `NEWS_TICK_INTERVAL_MS` / `NEWS_RETRY_MINUTES` | `700` / `60000` / `20` | Лимит ответа, интервал опроса планировщика и мягкий повтор при сбое |
+| `NEWS_MAX_OUTPUT_TOKENS` / `NEWS_TICK_INTERVAL_MS` / `NEWS_RETRY_MINUTES` | `700` / `60000` / `20` | Лимит ответа, интервал опроса планировщика и мягкий повтор при сбое; lease на claim = `OPENAI_TIMEOUT_MS × (1 + OPENAI_MAX_RETRIES) + 60s` (мин. 3 мин), чтобы не было двойной отправки |
 | `NEWS_WEB_SEARCH` | `true` | Ежедневные новости через Responses API с hosted `web_search` (актуальные события; доп. стоимость). `false` — старый путь Chat Completions без веб-доступа |
 | `NEWS_SEARCH_CONTEXT_SIZE` | `medium` | Объём контекста веб-поиска: `low` / `medium` / `high` |
 | `NEWS_FORCE_WEB_SEARCH` | `true` | Принудительно требовать вызов `web_search` (`tool_choice: required`) |

@@ -8,6 +8,7 @@ import {
   buildNewsWebSearchTool,
   mapResponsesUsage,
   newsModel,
+  newsResponsesReasoningOptions,
   newsUsesWebSearch,
   responseHasSuccessfulWebSearchCall,
   responseHasWebSearchCall,
@@ -57,12 +58,18 @@ test('news web_search tool payload uses RU / Moscow and configured context size'
   });
 });
 
-test('Responses news params include tools, forced tool_choice, and low reasoning', () => {
+test('Responses news params include tools, forced tool_choice, and gated low reasoning', () => {
   const params = buildNewsResponsesCreateParams('games', 'Игры', '2026-11-17');
   assert.equal(params.model, newsModel());
   assert.deepEqual(params.tools, [buildNewsWebSearchTool()]);
   assert.equal(params.max_output_tokens, config.NEWS_MAX_OUTPUT_TOKENS);
-  assert.deepEqual(params.reasoning, { effort: 'low' });
+  assert.deepEqual(newsResponsesReasoningOptions('gpt-6-sol'), { reasoning: { effort: 'low' } });
+  assert.deepEqual(newsResponsesReasoningOptions('gpt-4.1-mini'), {});
+  if (/^gpt-6/i.test(params.model)) {
+    assert.deepEqual(params.reasoning, { effort: 'low' });
+  } else {
+    assert.equal('reasoning' in params, false);
+  }
   assert.match(params.instructions, /Обязательно используй веб-поиск/);
   assert.match(params.input, /веб-поиск/i);
   if (config.NEWS_FORCE_WEB_SEARCH === 'true') {
