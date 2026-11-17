@@ -8,7 +8,7 @@ import {
 } from './chat-context.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { config } from './config.js';
-import { recordOpenAiUsage, selectPrecedingMessages } from './db.js';
+import { persistBotMessage, recordOpenAiUsage, selectPrecedingMessages } from './db.js';
 import { splitReply } from './summary.js';
 import { startStatus } from './status.js';
 
@@ -21,6 +21,18 @@ export function setBotIdentity(id: number, username: string) {
 
 export function getBotUsername() {
   return botIdentity?.username;
+}
+
+/** Display label for persisted outbound bot replies (`@username`). */
+export function getBotAuthorLabel() {
+  return botIdentity?.username ? `@${botIdentity.username}` : 'Бот';
+}
+
+async function persistSentBotReply(chatId: number, sent: Message | undefined) {
+  if (!sent) return;
+  await persistBotMessage(chatId, sent, getBotAuthorLabel()).catch(() => {
+    console.error('Bot message persist failed', { chatId, messageId: sent.message_id });
+  });
 }
 
 function entitiesOf(message: Message): MessageEntity[] {
@@ -345,13 +357,17 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     const preview = { link_preview_options: { is_disabled: true as const } };
 
     if (result.images.length === 1) {
-      await ctx.replyWithPhoto(new InputFile(result.images[0]!, 'image.png'), {
+      const photo = await ctx.replyWithPhoto(new InputFile(result.images[0]!, 'image.png'), {
         ...reply,
         caption: parts[0]!.slice(0, config.TELEGRAM_MAX_CAPTION_LENGTH),
       });
-      for (const part of parts.slice(1)) await ctx.reply(part, { ...reply, ...preview });
+      await persistSentBotReply(chatId, photo);
+      for (const part of parts.slice(1)) {
+        const sent = await ctx.reply(part, { ...reply, ...preview });
+        await persistSentBotReply(chatId, sent);
+      }
     } else if (result.images.length > 1) {
-      await ctx.replyWithMediaGroup(
+      const album = await ctx.replyWithMediaGroup(
         result.images.map((buffer, index) => ({
           type: 'photo' as const,
           media: new InputFile(buffer, `image-${index}.png`),
@@ -359,10 +375,18 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
         })),
         reply,
       );
-      for (const part of parts.slice(1)) await ctx.reply(part, { ...reply, ...preview });
+      await persistSentBotReply(chatId, album[0]);
+      for (const part of parts.slice(1)) {
+        const sent = await ctx.reply(part, { ...reply, ...preview });
+        await persistSentBotReply(chatId, sent);
+      }
     } else {
-      await ctx.reply(parts[0]!, { ...reply, ...preview });
-      for (const part of parts.slice(1)) await ctx.reply(part, { ...reply, ...preview });
+      const first = await ctx.reply(parts[0]!, { ...reply, ...preview });
+      await persistSentBotReply(chatId, first);
+      for (const part of parts.slice(1)) {
+        const sent = await ctx.reply(part, { ...reply, ...preview });
+        await persistSentBotReply(chatId, sent);
+      }
     }
     await status.clear();
   } catch {

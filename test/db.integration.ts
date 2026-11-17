@@ -4,6 +4,7 @@ import {
   pool,
   initializeDatabase,
   saveMessage,
+  persistBotMessage,
   selectMessages,
   selectPrecedingMessages,
   claimSummary,
@@ -17,12 +18,13 @@ try {
   await initializeDatabase();
   await pool.query('DELETE FROM messages WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);
   await pool.query('DELETE FROM summary_requests WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);
-  const row = (id: number, text: string, ageHours = 0, threadId: number | null = null) => ({
+  const row = (id: number, text: string, ageHours = 0, threadId: number | null = null, isBot = false) => ({
     message_id: id,
-    author: 'Тест',
+    author: isBot ? '@summary_bot' : 'Тест',
     text,
     sent_at: new Date(Date.now() - ageHours * 3600000),
     message_thread_id: threadId,
+    is_bot: isBot,
   });
   await saveMessage(chatA, row(1, 'old', 48));
   await saveMessage(chatA, row(2, 'original', 1));
@@ -33,13 +35,28 @@ try {
   await saveMessage(chatA, row(10, 'topic-a-1', 0.1, 7));
   await saveMessage(chatA, row(11, 'topic-b', 0.05, 8));
   await saveMessage(chatA, row(12, 'topic-a-2', 0.02, 7));
-  await saveMessage(chatA, row(13, 'question-in-topic', 0, 7));
+  await saveMessage(chatA, row(13, 'bot reply in topic', 0.01, 7, true));
+  await saveMessage(chatA, row(15, 'question-in-topic', 0, 7));
+  await persistBotMessage(
+    chatA,
+    { message_id: 20, date: Math.floor(Date.now() / 1000), text: '  persisted bot text  ', message_thread_id: 7 },
+    '@summary_bot',
+  );
+  await persistBotMessage(
+    chatA,
+    { message_id: 21, date: Math.floor(Date.now() / 1000), text: '   ', message_thread_id: 7 },
+    '@summary_bot',
+  );
   const connection = await pool.connect();
   try {
     const rows = await selectMessages(chatA, { kind: 'count', count: 10 }, 3, connection);
     assert.deepEqual(rows.map((r) => r.text), ['old', 'edited']);
     const recent = await selectMessages(chatA, { kind: 'hours', hours: 24 }, 3, connection);
     assert.deepEqual(recent.map((r) => r.text), ['edited']);
+    // Bot rows are excluded from summary/gif selectMessages.
+    const withBotBoundary = await selectMessages(chatA, { kind: 'count', count: 20 }, 25, connection);
+    assert.equal(withBotBoundary.some((r) => r.text === 'bot reply in topic'), false);
+    assert.equal(withBotBoundary.some((r) => r.text === 'persisted bot text'), false);
     assert.equal(await claimSummary(chatA, connection), true);
     assert.equal(await claimSummary(chatA, connection), false);
     assert.equal(await claimSummary(chatB, connection), true);
@@ -54,13 +71,29 @@ try {
     assert.equal((await selectMessages(chatA, { kind: 'hours', hours: 24 }, 3, connection)).length, 0);
     const preceding = await selectPrecedingMessages({
       chatId: chatA,
-      beforeMessageId: 13,
+      beforeMessageId: 15,
       beforeSentAt: new Date(),
       messageThreadId: 7,
       lookbackMinutes: 15,
       maxMessages: 12,
     });
-    assert.deepEqual(preceding.map((r) => r.text), ['topic-a-1', 'topic-a-2']);
+    // Preceding context includes bot replies.
+    assert.deepEqual(preceding.map((r) => r.text), ['topic-a-1', 'topic-a-2', 'bot reply in topic']);
+    const afterPersist = await selectPrecedingMessages({
+      chatId: chatA,
+      beforeMessageId: 99,
+      beforeSentAt: new Date(),
+      messageThreadId: 7,
+      lookbackMinutes: 15,
+      maxMessages: 12,
+    });
+    assert.ok(afterPersist.some((r) => r.text === 'persisted bot text'));
+    assert.equal(afterPersist.some((r) => r.message_id === 21), false);
+    const botFlag = await pool.query<{ is_bot: boolean }>(
+      'SELECT is_bot FROM messages WHERE chat_id = $1 AND message_id = 20',
+      [chatA],
+    );
+    assert.equal(botFlag.rows[0]?.is_bot, true);
     const storedThread = await pool.query<{ message_thread_id: number | null }>(
       'SELECT message_thread_id FROM messages WHERE chat_id = $1 AND message_id = 10',
       [chatA],

@@ -20,9 +20,11 @@ export async function initializeDatabase() {
       text TEXT NOT NULL,
       sent_at TIMESTAMPTZ NOT NULL,
       message_thread_id INTEGER NULL,
+      is_bot BOOLEAN NOT NULL DEFAULT false,
       PRIMARY KEY (chat_id, message_id)
     );
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_thread_id INTEGER NULL;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS messages_chat_time ON messages (chat_id, sent_at DESC, message_id DESC);
     CREATE INDEX IF NOT EXISTS messages_chat_thread_time
       ON messages (chat_id, message_thread_id, sent_at DESC, message_id DESC);
@@ -817,12 +819,13 @@ export async function deleteVideoCache(sourceUrl: string) {
 }
 
 export async function saveMessage(chatId: number, message: ChatMessage) {
-  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at, message_thread_id)
-    VALUES ($1, $2, $3, $4, $5, $6)
+  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at, message_thread_id, is_bot)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (chat_id, message_id) DO UPDATE SET
       author = EXCLUDED.author,
       text = EXCLUDED.text,
-      message_thread_id = EXCLUDED.message_thread_id`,
+      message_thread_id = EXCLUDED.message_thread_id,
+      is_bot = EXCLUDED.is_bot`,
   [
     String(chatId),
     message.message_id,
@@ -830,7 +833,32 @@ export async function saveMessage(chatId: number, message: ChatMessage) {
     message.text,
     message.sent_at,
     message.message_thread_id ?? null,
+    message.is_bot ?? false,
   ]);
+}
+
+/** Persist a successfully sent bot text/caption reply for mention/auto-answer context. */
+export async function persistBotMessage(
+  chatId: number,
+  sentMessage: {
+    message_id: number;
+    date: number;
+    text?: string;
+    caption?: string;
+    message_thread_id?: number;
+  },
+  authorLabel: string,
+) {
+  const text = (sentMessage.text ?? sentMessage.caption ?? '').trim();
+  if (!text) return;
+  await saveMessage(chatId, {
+    message_id: sentMessage.message_id,
+    author: authorLabel,
+    text,
+    sent_at: new Date(sentMessage.date * 1000),
+    message_thread_id: sentMessage.message_thread_id ?? null,
+    is_bot: true,
+  });
 }
 
 /** Preceding lines for OpenAI context (newest-first SQL, returned chronological). */
@@ -888,6 +916,7 @@ export async function selectMessages(chatId: number, selection: Selection, befor
   const result = await connection.query<ChatMessage>(`
     SELECT message_id, author, text, sent_at FROM messages
     WHERE chat_id = $1 AND message_id < $2
+      AND is_bot = false
       AND sent_at >= now() - ($3::int * interval '1 hour')
     ORDER BY sent_at DESC, message_id DESC LIMIT $4`,
   [String(chatId), beforeId, selection.kind === 'hours' ? selection.hours : config.RETENTION_DAYS * 24,

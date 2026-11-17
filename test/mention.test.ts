@@ -262,6 +262,14 @@ test('mention system prompt explains preceding context blocks', () => {
   assert.match(plain, /Контекст \(недавние сообщения\)/);
   assert.match(plain, /Запрос/);
   assert.match(plain, /Цитата/);
+  assert.match(plain, /собственные более ранние ответы/i);
   const meme = buildMentionSystemPrompt(0, true, 2, false, true);
   assert.match(meme, /Контекст \(недавние сообщения\)/);
+  assert.match(meme, /собственные более ранние ответы/i);
+});
+
+test('getBotAuthorLabel uses @username when identity is set', async () => {
+  const { getBotAuthorLabel, setBotIdentity } = await import('../src/mention.js');
+  setBotIdentity(42, 'Summary_Bot');
+  assert.equal(getBotAuthorLabel(), '@summary_bot');
 });
