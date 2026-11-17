@@ -8,10 +8,38 @@ import {
 } from './chat-context.js';
 import { resolveChatSettings } from './chat-settings.js';
 import { config } from './config.js';
-import { persistBotMessage, recordOpenAiUsage, selectPrecedingMessages } from './db.js';
+import {
+  getChatParticipant,
+  getLatestMemberCount,
+  persistBotMessage,
+  recordOpenAiUsage,
+  selectPrecedingMessages,
+} from './db.js';
+import { isChatMemberCountEligible } from './personalization.js';
 import { splitReply, splitCaptionReply, truncateText } from './summary.js';
 import { enqueueAi } from './ai-jobs.js';
 import { startStatus } from './status.js';
+
+/** Load interlocutor characteristic when personalization is on and chat is small enough. */
+export async function resolveInterlocutorCharacteristic(
+  chatId: number,
+  userId: number | undefined,
+  personalizationEnabled: boolean,
+): Promise<string | undefined> {
+  if (
+    config.PERSONALIZATION_ENABLED !== 'true'
+    || !personalizationEnabled
+    || userId == null
+  ) {
+    return;
+  }
+  const memberCount = await getLatestMemberCount(chatId);
+  // No snapshot yet → optimistic allow if a characteristic exists.
+  if (memberCount != null && !isChatMemberCountEligible(memberCount)) return;
+  const participant = await getChatParticipant(chatId, userId);
+  const characteristic = participant?.characteristic?.trim();
+  return characteristic || undefined;
+}
 
 let botIdentity: { id: number; username: string } | undefined;
 const recentMentions = new Map<number, number>();
@@ -342,6 +370,11 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
     const memeMode = isMemeRequest(userText);
     const status = await startStatus(ctx, memeMode ? '⏳ Делаю мем…' : '⏳ Думаю…', reply);
     try {
+      const interlocutorCharacteristic = await resolveInterlocutorCharacteristic(
+        chat.id,
+        message.from?.id,
+        settings.personalizationEnabled,
+      ).catch(() => undefined);
       const inputImages = await downloadTelegramImages(ctx.api, fileIds);
       const result = await replyToMention(prompt || 'Опиши и прокомментируй изображение(я).', {
         sarcasmLevel: settings.sarcasmLevel,
@@ -351,6 +384,7 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
         maxOutputTokens: config.MENTION_MAX_OUTPUT_TOKENS,
         inputImages,
         memeMode,
+        interlocutorCharacteristic,
       });
       const chatId = chat.id;
       await recordOpenAiUsage(chatId, {
