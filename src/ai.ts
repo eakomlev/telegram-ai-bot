@@ -843,7 +843,7 @@ export async function draftParticipantCharacteristics(params: {
 
   const result = await client.chat.completions.create({
     ...chatCompletionModelOptions(model),
-    max_completion_tokens: config.PERSONALIZATION_MAX_OUTPUT_TOKENS,
+    max_completion_tokens: config.PERSONALIZATION_DRAFT_MAX_OUTPUT_TOKENS,
     messages: [
       { role: 'system', content: buildPersonalizationDraftSystemPrompt() },
       { role: 'user', content: userPrompt },

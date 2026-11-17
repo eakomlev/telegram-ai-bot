@@ -119,7 +119,9 @@ const schema = z.object({
   PERSONALIZATION_MAX_MESSAGES: integer(500, 1, 5000),
   PERSONALIZATION_MAX_INPUT_CHARS: integer(12000, 1000, 200000),
   PERSONALIZATION_MAX_OUTPUT_TOKENS: integer(500, 64, 4000),
-  PERSONALIZATION_PROMPT_MAX_CHARS: integer(1000, 100, 8000),
+  /** Higher budget for multi-user draft JSON; merge still uses PERSONALIZATION_MAX_OUTPUT_TOKENS. */
+  PERSONALIZATION_DRAFT_MAX_OUTPUT_TOKENS: integer(1500, 64, 4000),
+  PERSONALIZATION_PROMPT_MAX_CHARS: integer(3000, 100, 8000),
   PERSONALIZATION_BATCH_USERS: integer(10, 1, 50),
   /** Empty → use OPENAI_MODEL for personalization drafts/merges. */
   OPENAI_PERSONALIZATION_MODEL: z.string().default(''),

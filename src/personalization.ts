@@ -12,14 +12,17 @@ import {
   recordOpenAiUsage,
   saveChatMemberSnapshot,
   updateParticipantCharacteristic,
+  type ChatParticipantRow,
   type PersonalizationMessage,
 } from './db.js';
 import type { Api } from 'grammy';
 
-const DATA_ROOT = path.join(process.cwd(), 'data', 'personalization');
+function dataRoot() {
+  return path.join(process.cwd(), 'data', 'personalization');
+}
 
 export function personalizationChatDir(chatId: number) {
-  return path.join(DATA_ROOT, String(chatId));
+  return path.join(dataRoot(), String(chatId));
 }
 
 export function personalizationDraftPath(chatId: number, userId: number) {
@@ -41,12 +44,30 @@ export function buildPersonalizationTranscript(messages: PersonalizationMessage[
   return messages.map(formatTranscriptLine).join('\n');
 }
 
+/** Fail closed: unknown counts are not eligible. */
 export function isChatMemberCountEligible(
   memberCount: number | undefined | null,
   maxMembers = config.PERSONALIZATION_MAX_CHAT_MEMBERS,
 ): boolean {
-  if (memberCount == null || !Number.isFinite(memberCount)) return true;
+  if (memberCount == null || !Number.isFinite(memberCount)) return false;
   return memberCount < maxMembers;
+}
+
+/** Participants who actually spoke in the message window (no silent-user fallback). */
+export function selectActivePersonalizationTargets<T extends { userId: number }>(
+  participants: T[],
+  activeUserIds: Iterable<number>,
+): T[] {
+  const active = activeUserIds instanceof Set ? activeUserIds : new Set(activeUserIds);
+  return participants.filter((p) => active.has(p.userId));
+}
+
+/** Soft skips keep the daily claim; productive empty/failed runs must clear it. */
+export function shouldClearPersonalizationClaim(result: {
+  skipped: boolean;
+  updated: number;
+}): boolean {
+  return !result.skipped && result.updated <= 0;
 }
 
 /** Split transcript into chunks that fit PERSONALIZATION_MAX_INPUT_CHARS (by whole lines). */
@@ -90,13 +111,25 @@ async function ensureChatDir(chatId: number) {
   await mkdir(personalizationChatDir(chatId), { recursive: true });
 }
 
+/** Remove the chat draft directory so retries do not append to stale files. */
+export async function wipeChatDraftDir(chatId: number): Promise<void> {
+  await rm(personalizationChatDir(chatId), { recursive: true, force: true }).catch(() => {});
+}
+
+/**
+ * Write draft txt files. Appends when a file already exists (same run / chunk loop);
+ * callers must wipe the chat dir once at the start of each run.
+ */
 export async function writeDraftFiles(
   chatId: number,
   drafts: Map<number, string>,
-): Promise<void> {
-  if (!drafts.size) return;
+): Promise<number> {
+  if (!drafts.size) return 0;
   await ensureChatDir(chatId);
+  let written = 0;
   for (const [userId, draft] of drafts) {
+    const body = draft.trim();
+    if (!body) continue;
     const filePath = personalizationDraftPath(chatId, userId);
     let previous = '';
     try {
@@ -104,11 +137,11 @@ export async function writeDraftFiles(
     } catch {
       // first draft for this user in the run
     }
-    const next = previous.trim()
-      ? `${previous.trim()}\n\n${draft.trim()}`
-      : draft.trim();
+    const next = previous.trim() ? `${previous.trim()}\n\n${body}` : body;
     await writeFile(filePath, next, 'utf8');
+    written += 1;
   }
+  return written;
 }
 
 export async function readDraftFile(chatId: number, userId: number): Promise<string | undefined> {
@@ -160,27 +193,28 @@ export async function cleanupStaleDraftFiles(
   }
 }
 
+/** Prefer a live Telegram count; fall back to the latest snapshot. Persist when live-fetched. */
 export async function resolveChatMemberCount(
   api: Api | undefined,
   chatId: number,
 ): Promise<number | undefined> {
-  const cached = await getLatestMemberCount(chatId);
-  if (cached != null) return cached;
-  if (!api) return;
-  try {
-    const count = await api.getChatMemberCount(chatId);
-    if (!Number.isFinite(count) || count < 0) return;
-    const memberCount = Math.floor(count);
-    const capturedOn = new Date().toISOString().slice(0, 10);
-    await saveChatMemberSnapshot(chatId, capturedOn, memberCount).catch(() => {});
-    return memberCount;
-  } catch (error) {
-    console.error('Personalization member count fetch failed', {
-      chatId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return;
+  if (api) {
+    try {
+      const count = await api.getChatMemberCount(chatId);
+      if (Number.isFinite(count) && count >= 0) {
+        const memberCount = Math.floor(count);
+        const capturedOn = new Date().toISOString().slice(0, 10);
+        await saveChatMemberSnapshot(chatId, capturedOn, memberCount).catch(() => {});
+        return memberCount;
+      }
+    } catch (error) {
+      console.error('Personalization member count fetch failed', {
+        chatId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
+  return getLatestMemberCount(chatId);
 }
 
 async function addUsage(
@@ -197,19 +231,31 @@ async function addUsage(
   }).catch(() => console.error('OpenAI usage record failed', { chatId, kind: 'personalization' }));
 }
 
+export type PersonalizationRunResult = {
+  skipped: boolean;
+  reason?: string;
+  updated: number;
+};
+
 /**
  * Full-day dump → OpenAI drafts (with chunk/batch fallback) → txt files →
  * per-user merge into DB → delete successful txts.
+ * Soft skips keep the daily claim; empty/failed productive runs throw so the
+ * scheduler clears the claim for same-day retry.
  */
 export async function runPersonalizationForChat(
   chatId: number,
   options: { api?: Api; now?: Date } = {},
-): Promise<{ skipped: boolean; reason?: string; updated: number }> {
+): Promise<PersonalizationRunResult> {
   const now = options.now ?? new Date();
   const memberCount = await resolveChatMemberCount(options.api, chatId);
   if (!isChatMemberCountEligible(memberCount)) {
     await cleanupStaleDraftFiles(chatId, []);
-    return { skipped: true, reason: 'member_count', updated: 0 };
+    return {
+      skipped: true,
+      reason: memberCount == null ? 'member_count_unknown' : 'member_count',
+      updated: 0,
+    };
   }
 
   const until = now;
@@ -220,18 +266,25 @@ export async function runPersonalizationForChat(
     until,
     maxMessages: config.PERSONALIZATION_MAX_MESSAGES,
   });
+  if (!messages.length) {
+    await cleanupStaleDraftFiles(chatId, []);
+    return { skipped: true, reason: 'no_messages', updated: 0 };
+  }
+
   const participants = await listChatParticipants(chatId, config.PERSONALIZATION_MAX_USERS_PER_CHAT);
   if (!participants.length) {
     return { skipped: true, reason: 'no_participants', updated: 0 };
   }
 
   const activeIds = new Set(messages.map((m) => m.authorUserId));
-  const targets = participants.filter((p) => activeIds.has(p.userId));
-  const workList = targets.length ? targets : participants.slice(0, config.PERSONALIZATION_BATCH_USERS);
-  if (!messages.length) {
+  const workList: ChatParticipantRow[] = selectActivePersonalizationTargets(participants, activeIds);
+  if (!workList.length) {
     await cleanupStaleDraftFiles(chatId, []);
-    return { skipped: true, reason: 'no_messages', updated: 0 };
+    return { skipped: true, reason: 'no_active_participants', updated: 0 };
   }
+
+  // Fresh run: never append onto leftover files from a previous failed attempt.
+  await wipeChatDraftDir(chatId);
 
   const transcript = buildPersonalizationTranscript(messages);
   const chunks = chunkTranscriptByChars(transcript);
@@ -244,6 +297,7 @@ export async function runPersonalizationForChat(
     || userBatches.length > 1
     || transcript.length > config.PERSONALIZATION_MAX_INPUT_CHARS;
 
+  let draftsWritten = 0;
   try {
     if (!needsBatching) {
       const { drafts, usage } = await draftParticipantCharacteristics({
@@ -251,7 +305,7 @@ export async function runPersonalizationForChat(
         participants: workList.map((p) => ({ userId: p.userId, displayName: p.displayName })),
       });
       await addUsage(chatId, usage);
-      await writeDraftFiles(chatId, drafts);
+      draftsWritten += await writeDraftFiles(chatId, drafts);
     } else {
       for (const chunk of chunks.length ? chunks : ['']) {
         for (const batch of userBatches) {
@@ -260,7 +314,7 @@ export async function runPersonalizationForChat(
             participants: batch,
           });
           await addUsage(chatId, usage);
-          await writeDraftFiles(chatId, drafts);
+          draftsWritten += await writeDraftFiles(chatId, drafts);
         }
       }
     }
@@ -270,6 +324,10 @@ export async function runPersonalizationForChat(
       message: error instanceof Error ? error.message : String(error),
     });
     throw error;
+  }
+
+  if (draftsWritten <= 0) {
+    throw new Error('Personalization drafts empty');
   }
 
   let updated = 0;
@@ -297,16 +355,19 @@ export async function runPersonalizationForChat(
         userId: participant.userId,
         message: error instanceof Error ? error.message : String(error),
       });
-      // leave txt for next run overwrite
+      // leave txt for next run (wiped at start of retry)
     }
   }
 
-  // Keep only drafts that still need a merge retry; drop stale leftovers.
   const keepFailed: number[] = [];
   for (const participant of workList) {
     if (await readDraftFile(chatId, participant.userId)) keepFailed.push(participant.userId);
   }
   await cleanupStaleDraftFiles(chatId, keepFailed);
+
+  if (updated <= 0) {
+    throw new Error('Personalization merges produced no updates');
+  }
 
   return { skipped: false, updated };
 }

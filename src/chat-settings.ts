@@ -133,7 +133,6 @@ export async function saveChatSettings(chatId: number, settings: ChatSettings) {
     news_last_sent_on: null,
     auto_answer_enabled: next.autoAnswerEnabled,
     personalization_enabled: next.personalizationEnabled,
-    personalization_last_run_on: null,
   });
   return next;
 }

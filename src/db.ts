@@ -321,7 +321,8 @@ export type ChatSettingsRow = {
   news_last_sent_on: string | null;
   auto_answer_enabled: boolean;
   personalization_enabled: boolean;
-  personalization_last_run_on: string | null;
+  /** Present on reads; upsert ignores this field (scheduler owns last_run_on). */
+  personalization_last_run_on?: string | null;
 };
 
 export type DueNewsChat = {
@@ -1150,7 +1151,12 @@ export type PersonalizationMessage = {
   sentAt: Date;
 };
 
-/** Non-bot messages with author_user_id in [since, until], chronological, capped. */
+/** Newest-first rows → chronological order for transcripts. */
+export function chronologicalFromNewestFirst<T>(rows: T[]): T[] {
+  return rows.slice().reverse();
+}
+
+/** Non-bot messages with author_user_id in [since, until]: latest N, returned chronological. */
 export async function listMessagesForPersonalization(params: {
   chatId: number;
   since: Date;
@@ -1171,11 +1177,11 @@ export async function listMessagesForPersonalization(params: {
        AND author_user_id IS NOT NULL
        AND sent_at >= $2::timestamptz
        AND sent_at < $3::timestamptz
-     ORDER BY sent_at ASC, message_id ASC
+     ORDER BY sent_at DESC, message_id DESC
      LIMIT $4`,
     [String(params.chatId), params.since, params.until, maxMessages],
   );
-  return result.rows.map((row) => ({
+  return chronologicalFromNewestFirst(result.rows).map((row) => ({
     authorUserId: Number(row.author_user_id),
     displayName: row.author,
     text: row.text,

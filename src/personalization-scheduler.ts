@@ -6,7 +6,11 @@ import {
   listDuePersonalizationChats,
 } from './db.js';
 import { moscowDateString, moscowParts } from './moscow-time.js';
-import { runPersonalizationForChat } from './personalization.js';
+import {
+  runPersonalizationForChat,
+  shouldClearPersonalizationClaim,
+  type PersonalizationRunResult,
+} from './personalization.js';
 
 let personalizationTimer: NodeJS.Timeout | undefined;
 let runningTick: Promise<void> | undefined;
@@ -25,6 +29,14 @@ export function isPersonalizationDayDue(
   moscowDate: string,
 ): boolean {
   return !lastRunOn || lastRunOn < moscowDate;
+}
+
+/** After a claimed run: clear claim on thrown errors or empty productive results. */
+export function shouldRetryPersonalizationClaim(
+  result: PersonalizationRunResult | undefined,
+  error?: unknown,
+): boolean {
+  return error != null || (result != null && shouldClearPersonalizationClaim(result));
 }
 
 export function runPersonalizationSchedulerTick(api: Api, now = new Date()): Promise<void> {
@@ -48,19 +60,27 @@ async function runTick(api: Api, now: Date) {
     const claimed = await claimPersonalizationRun(chatId, moscowDate);
     if (!claimed) continue;
     try {
-      await runPersonalizationForChat(chatId, { api, now });
+      const result = await runPersonalizationForChat(chatId, { api, now });
+      if (shouldRetryPersonalizationClaim(result)) {
+        await clearPersonalizationRunClaim(chatId, moscowDate).catch((clearError) =>
+          console.error('Personalization claim clear failed', {
+            chatId,
+            message: clearError instanceof Error ? clearError.message : String(clearError),
+          }),
+        );
+      }
     } catch (error) {
       console.error('Personalization run failed', {
         chatId,
         message: error instanceof Error ? error.message : String(error),
       });
-      try {
-        await clearPersonalizationRunClaim(chatId, moscowDate);
-      } catch (clearError) {
-        console.error('Personalization claim clear failed', {
-          chatId,
-          message: clearError instanceof Error ? clearError.message : String(clearError),
-        });
+      if (shouldRetryPersonalizationClaim(undefined, error)) {
+        await clearPersonalizationRunClaim(chatId, moscowDate).catch((clearError) =>
+          console.error('Personalization claim clear failed', {
+            chatId,
+            message: clearError instanceof Error ? clearError.message : String(clearError),
+          }),
+        );
       }
     }
   }

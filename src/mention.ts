@@ -20,25 +20,34 @@ import { splitReply, splitCaptionReply, truncateText } from './summary.js';
 import { enqueueAi } from './ai-jobs.js';
 import { startStatus } from './status.js';
 
+/** Pure gate for reply-time characteristic injection (fail closed on unknown member count). */
+export function pickInjectedCharacteristic(params: {
+  globalEnabled: boolean;
+  chatEnabled: boolean;
+  memberCount: number | undefined | null;
+  characteristic: string | null | undefined;
+}): string | undefined {
+  if (!params.globalEnabled || !params.chatEnabled) return;
+  if (!isChatMemberCountEligible(params.memberCount)) return;
+  const text = params.characteristic?.trim();
+  return text || undefined;
+}
+
 /** Load interlocutor characteristic when personalization is on and chat is small enough. */
 export async function resolveInterlocutorCharacteristic(
   chatId: number,
   userId: number | undefined,
   personalizationEnabled: boolean,
 ): Promise<string | undefined> {
-  if (
-    config.PERSONALIZATION_ENABLED !== 'true'
-    || !personalizationEnabled
-    || userId == null
-  ) {
-    return;
-  }
+  if (userId == null) return;
   const memberCount = await getLatestMemberCount(chatId);
-  // No snapshot yet → optimistic allow if a characteristic exists.
-  if (memberCount != null && !isChatMemberCountEligible(memberCount)) return;
   const participant = await getChatParticipant(chatId, userId);
-  const characteristic = participant?.characteristic?.trim();
-  return characteristic || undefined;
+  return pickInjectedCharacteristic({
+    globalEnabled: config.PERSONALIZATION_ENABLED === 'true',
+    chatEnabled: personalizationEnabled,
+    memberCount,
+    characteristic: participant?.characteristic,
+  });
 }
 
 let botIdentity: { id: number; username: string } | undefined;
