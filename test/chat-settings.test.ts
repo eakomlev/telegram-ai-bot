@@ -105,7 +105,10 @@ test('verse summary prompt is a separate humorous poem brief', () => {
 test('summary prompt includes response tone only when not gentleman', () => {
   assert.doesNotMatch(buildSummarySystemPrompt(0, 'plain', 'gentleman'), /Тон ответа —/);
   assert.match(buildSummarySystemPrompt(0, 'plain', 'pacanchik'), /пацанчик/);
-  assert.match(buildSummarySystemPrompt(0, 'plain', 'derzkiy'), /дерзкий/);
+  const derzkiy = buildSummarySystemPrompt(0, 'plain', 'derzkiy');
+  assert.match(derzkiy, /дерзкий/);
+  assert.match(derzkiy, /супер-дерзко/);
+  assert.match(derzkiy, /остроумно/);
 });
 
 test('mention and auto-answer prompts respect response tone', () => {
