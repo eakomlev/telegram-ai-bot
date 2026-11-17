@@ -384,8 +384,23 @@ try {
       void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
     },
   });
-} catch {
-  console.error('Startup or polling failed. Check configuration and service connectivity.');
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    error && typeof error === 'object' && 'error_code' in error
+      ? String((error as { error_code?: unknown }).error_code)
+      : undefined;
+  const conflict =
+    code === '409' || /409|Conflict: terminated by other getUpdates/i.test(message);
+  console.error(
+    conflict
+      ? 'Polling conflict (409): another getUpdates is using this bot token. Stop other instances (local npm/dev, second container, VPS).'
+      : 'Startup or polling failed. Check configuration and service connectivity.',
+    code ? { error_code: code, message } : { message },
+  );
+  if (error instanceof Error && error.stack) console.error(error.stack);
   await shutdown();
+  // Avoid Docker restart thrash: a dying peer's long-poll can outlive the process for tens of seconds.
+  if (conflict) await new Promise((resolve) => setTimeout(resolve, 45_000));
   process.exitCode = 1;
 }
