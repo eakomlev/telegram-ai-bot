@@ -36,7 +36,7 @@ src/
   index.ts                 # grammY-бот, команды, wiring
   config.ts                # Zod + env
   core/                    # db, migrate.ts + migrations/, очереди AI/media, process, status, moscow-time
-  ai/                      # OpenAI-вызовы, usage/$, openai-costs (Admin API /costs)
+  ai/                      # OpenAI-вызовы, usage/$, openai-costs (Admin API /costs + usage tokens)
   chat/                    # настройки чата, UI /settings, контекст, снимки участников
   summary/                 # выборка и нарезка текста для саммари
   mention/                 # @упоминания и reply-to-bot
@@ -60,7 +60,7 @@ src/
 | `/settings` | Inline-меню настроек группы (только админы) |
 | `/usage` | Оценка расходов OpenAI по этой группе (админы) |
 | `/stats` | Рост чатов/участников за месяц (МСК) и токены по чатам — только в личке у `OWNER_USER_ID` |
-| `/costs` | Официальные расходы организации OpenAI за текущий месяц (МСК, MTD) — только в личке у `OWNER_USER_ID`; нужен `OPENAI_ADMIN_API_KEY` |
+| `/costs` | Официальные расходы и токены completions организации OpenAI за текущий месяц (МСК, MTD) — только в личке у `OWNER_USER_ID`; нужен `OPENAI_ADMIN_API_KEY` |
 | `/personalize` | Ручной запуск персонализации (все eligible-чаты) — только в личке у `OWNER_USER_ID` |
 | `/personalize <chat_id>` | То же для одного чата |
 | `/help` / `/start` | Справка |
@@ -128,7 +128,7 @@ Inline-меню только для админов: саммари только 
 
 `/stats` в личке владельца — рост за текущий календарный месяц Europe/Moscow (новые чаты с первым usage и прирост участников по снимкам `chat_member_snapshots`) и список чатов: название (`id`), число участников, сумма prompt+completion токенов за срок хранения usage. Без оценки $.
 
-`/costs` в личке владельца — сумма из Admin API `GET /v1/organization/costs` за текущий календарный месяц Europe/Moscow (MTD). Нужен отдельный `OPENAI_ADMIN_API_KEY` (не `OPENAI_API_KEY`); `OPENAI_BASE_URL` для этого запроса не используется.
+`/costs` в личке владельца — сумма из Admin API `GET /v1/organization/costs` и токены completions из `GET /v1/organization/usage/completions` за текущий календарный месяц Europe/Moscow (MTD). Нужен отдельный `OPENAI_ADMIN_API_KEY` (не `OPENAI_API_KEY`); `OPENAI_BASE_URL` для этих запросов не используется.
 
 ## Полный каталог конфигурации
 
