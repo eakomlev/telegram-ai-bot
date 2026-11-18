@@ -104,7 +104,7 @@ test('fetchOrganizationCostsMtd paginates with page cursor and sums buckets', as
     calls.push(url);
     assert.equal(url.origin + url.pathname, 'https://api.openai.com/v1/organization/costs');
     assert.equal(url.searchParams.get('bucket_width'), '1d');
-    assert.equal(url.searchParams.get('limit'), '31');
+    assert.equal(url.searchParams.get('limit'), '32');
     assert.ok(!url.searchParams.has('group_by'));
 
     if (!url.searchParams.get('page')) {

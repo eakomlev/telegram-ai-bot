@@ -4,7 +4,8 @@ import { formatUsd } from './usage.js';
 
 const COSTS_ENDPOINT = 'https://api.openai.com/v1/organization/costs';
 const BUCKET_WIDTH = '1d';
-const BUCKET_LIMIT = 31;
+// Moscow MTD can span 32 UTC day buckets (MSK = UTC+3); API allows up to 180.
+const BUCKET_LIMIT = 32;
 const MAX_PAGES = 5;
 
 export type CostsFetch = typeof fetch;

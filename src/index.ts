@@ -486,7 +486,8 @@ try {
   await bot.api.setMyCommands(groupCommands, { scope: { type: 'all_group_chats' } });
   await bot.api.setMyCommands(
     [
-      { command: 'stats', description: 'Расходы OpenAI по всем группам' },
+      { command: 'stats', description: 'Оценка расходов OpenAI по всем группам' },
+      { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
       { command: 'personalize', description: 'Запуск персонализации участников' },
     ],
     { scope: { type: 'all_private_chats' } },
