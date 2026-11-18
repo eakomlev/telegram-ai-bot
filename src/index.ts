@@ -84,12 +84,12 @@ function isBotOwner(ctx: Context) {
   return Boolean(ownerUserId && ctx.from?.id === ownerUserId && !ctx.msg?.sender_chat);
 }
 
-/** Telegram title when available; otherwise the numeric chat id. */
+/** Telegram title with chat id in parentheses; otherwise the numeric chat id. */
 async function chatTitleOrId(chatId: number) {
   try {
     const chat = await bot.api.getChat(chatId);
     const title = 'title' in chat && chat.title ? chat.title : undefined;
-    return title ?? String(chatId);
+    return title ? `${title} (${chatId})` : String(chatId);
   } catch {
     return String(chatId);
   }

@@ -78,7 +78,7 @@ test('formatOwnerStatsReport skeleton and chat lines', () => {
     newChatsThisMonth: 2,
     newMembersThisMonth: 15,
     chats: [
-      { name: 'Семья', members: 42, tokens: 1200 },
+      { name: 'Семья (-1001)', members: 42, tokens: 1200 },
       { name: '-1002', tokens: 0 },
     ],
   });
@@ -91,7 +91,7 @@ test('formatOwnerStatsReport skeleton and chat lines', () => {
       'Участники: 15',
       '——',
       'Статистика чатов:',
-      'Семья - 42 - 1200',
+      'Семья (-1001) - 42 - 1200',
       '-1002 - — - 0',
       '——',
     ].join('\n'),
