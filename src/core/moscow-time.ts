@@ -41,6 +41,20 @@ export function moscowDateString(date = new Date()): string {
   return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
 }
 
+/** Instant of the 1st of the current Moscow calendar month at 00:00:00. */
+export function moscowMonthStart(now = new Date()): Date {
+  const { year, month } = moscowParts(now);
+  return zonedMoscowTime(year, month, 1, 0, 0, 0);
+}
+
+/** Instant of the 1st of the next Moscow calendar month at 00:00:00. */
+export function moscowNextMonthStart(now = new Date()): Date {
+  const { year, month } = moscowParts(now);
+  return month === 12
+    ? zonedMoscowTime(year + 1, 1, 1, 0, 0, 0)
+    : zonedMoscowTime(year, month + 1, 1, 0, 0, 0);
+}
+
 /** Instant corresponding to the given civil time in Europe/Moscow. */
 export function zonedMoscowTime(
   year: number,

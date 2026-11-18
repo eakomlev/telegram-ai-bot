@@ -10,6 +10,11 @@ const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   /** OpenAI API key. */
   OPENAI_API_KEY: z.string().min(1),
+  /**
+   * Optional OpenAI Admin API key for owner `/costs` (org billing).
+   * Do not reuse OPENAI_API_KEY — Admin keys are separate.
+   */
+  OPENAI_ADMIN_API_KEY: z.string().default(''),
   /** Default Chat Completions model (summary, mention, gif, auto-answer, …). For gpt-6* sets reasoning_effort=none. */
   OPENAI_MODEL: z.string().min(1).default('gpt-6-sol'),
   /** Optional OpenAI-compatible base URL; empty = official API. News+web_search needs /v1/responses + hosted web_search. */
@@ -33,7 +38,7 @@ const schema = z.object({
     (value) => !value.trim() || value.split(',').every((id) => /^-\d+$/.test(id.trim())),
     'Expected comma-separated negative Telegram group IDs',
   ),
-  /** Owner Telegram user id; private /stats across all chats works only for this account. */
+  /** Owner Telegram user id; private /stats, /costs, /personalize work only for this account. */
   OWNER_USER_ID: z.string().default('').refine(
     (value) => !value.trim() || /^\d+$/.test(value.trim()),
     'Expected numeric Telegram user id',

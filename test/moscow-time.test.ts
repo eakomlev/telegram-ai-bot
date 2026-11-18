@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   moscowDateString,
+  moscowMonthStart,
+  moscowNextMonthStart,
   moscowParts,
   pickRandomNewsRunAt,
   zonedMoscowTime,
@@ -66,4 +68,35 @@ test('pickRandomNewsRunAt rolls to next Moscow day after the 21:00 window', () =
   assert.equal(parts.day, 11);
   assert.equal(parts.hour, 10);
   assert.equal(parts.minute, 0);
+});
+
+test('moscowMonthStart is the 1st at 00:00:00 Moscow', () => {
+  const now = zonedMoscowTime(2026, 3, 18, 15, 30, 0);
+  const start = moscowMonthStart(now);
+  const parts = moscowParts(start);
+  assert.equal(parts.year, 2026);
+  assert.equal(parts.month, 3);
+  assert.equal(parts.day, 1);
+  assert.equal(parts.hour, 0);
+  assert.equal(parts.minute, 0);
+  assert.equal(parts.second, 0);
+});
+
+test('moscowNextMonthStart rolls Dec→Jan across year boundary', () => {
+  const lateDecember = zonedMoscowTime(2025, 12, 31, 23, 59, 59);
+  const next = moscowNextMonthStart(lateDecember);
+  const parts = moscowParts(next);
+  assert.equal(parts.year, 2026);
+  assert.equal(parts.month, 1);
+  assert.equal(parts.day, 1);
+  assert.equal(parts.hour, 0);
+  assert.equal(parts.minute, 0);
+  assert.equal(parts.second, 0);
+
+  const midYear = zonedMoscowTime(2026, 6, 15, 12, 0, 0);
+  const july = moscowNextMonthStart(midYear);
+  const julyParts = moscowParts(july);
+  assert.equal(julyParts.year, 2026);
+  assert.equal(julyParts.month, 7);
+  assert.equal(julyParts.day, 1);
 });

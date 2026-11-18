@@ -27,6 +27,8 @@ import { summarize, type SummaryStyle } from './ai/ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary/summary.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
 import { formatOwnerParticipantsReport, formatOwnerUsageReport, formatUsageReport } from './ai/usage.js';
+import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/openai-costs.js';
+import { moscowMonthStart } from './core/moscow-time.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
 import { startStatus } from './core/status.js';
 
@@ -101,14 +103,14 @@ bot.use(async (ctx, next) => {
   if (stopping) return;
   if (ctx.chat?.type === 'private') {
     const text = ctx.message?.text ?? '';
-    if (isBotOwner(ctx) && /^\/(?:stats|personalize)(?:@\w+)?(?:\s|$)/i.test(text)) {
+    if (isBotOwner(ctx) && /^\/(?:stats|costs|personalize)(?:@\w+)?(?:\s|$)/i.test(text)) {
       await next();
       return;
     }
     if (text.startsWith('/')) {
       await ctx.reply(
         ownerUserId && isBotOwner(ctx)
-          ? 'В личке доступны только /stats и /personalize.'
+          ? 'В личке доступны только /stats, /costs и /personalize.'
           : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
       );
     }
@@ -140,6 +142,40 @@ bot.command('usage', async (ctx) => {
     getOpenAiUsageTotals(chatId),
   ]);
   await ctx.reply(formatUsageReport(today, total), { link_preview_options: { is_disabled: true } });
+});
+bot.command('costs', async (ctx) => {
+  if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
+  if (!ownerUserId) {
+    await ctx.reply('Задайте OWNER_USER_ID в .env и перезапустите бота.');
+    return;
+  }
+  if (!config.OPENAI_ADMIN_API_KEY.trim()) {
+    await ctx.reply(
+      'Для /costs задайте OPENAI_ADMIN_API_KEY в .env (отдельный Admin API key организации OpenAI, не OPENAI_API_KEY) и перезапустите бота.',
+    );
+    return;
+  }
+  const now = new Date();
+  const monthStart = moscowMonthStart(now);
+  if (Math.floor(now.getTime() / 1000) <= Math.floor(monthStart.getTime() / 1000)) {
+    await ctx.reply('Пока нет данных за текущий месяц (Europe/Moscow).');
+    return;
+  }
+  const status = await startStatus(ctx, '⏳ Запрашиваю расходы OpenAI…');
+  try {
+    const report = await fetchOrganizationCostsMtd({ now });
+    await status.clear();
+    let text = formatOrganizationCostsReport(report);
+    if (report.truncated) {
+      text += '\n\n(Ответ Admin API обрезан по лимиту страниц — сумма может быть неполной.)';
+    }
+    await ctx.reply(text, { link_preview_options: { is_disabled: true } });
+  } catch (error) {
+    console.error('OpenAI organization costs failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    await status.fail('Не удалось получить расходы OpenAI. Попробуйте позже.');
+  }
 });
 bot.command('stats', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
