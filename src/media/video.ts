@@ -60,7 +60,8 @@ async function repost(ctx: Context, source: NonNullable<ReturnType<typeof parseV
     status = await startStatus(ctx, '⏳ Загружаю видео…', reply);
     actionTimer = setInterval(() => { void ctx.replyWithChatAction('upload_video').catch(() => {}); }, 4000);
     actionTimer.unref();
-    directory = await mkdtemp(join(tmpdir(), 'telegram-video-'));    const maxBytes = config.VIDEO_MAX_SIZE_MB * 1024 * 1024;
+    directory = await mkdtemp(join(tmpdir(), 'telegram-video-'));
+    const maxBytes = config.VIDEO_MAX_SIZE_MB * 1024 * 1024;
     const height = config.VIDEO_MAX_HEIGHT;
     const httpTimeout = String(config.DOWNLOADER_HTTP_TIMEOUT_SECONDS);
     const retries = String(config.DOWNLOADER_RETRIES);

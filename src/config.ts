@@ -72,7 +72,7 @@ const schema = z.object({
   TELEGRAM_MAX_CAPTION_LENGTH: integer(1024, 100, 1024),
   /** Max length of a standalone URL that triggers video/gallery/marketplace. */
   MEDIA_URL_MAX_LENGTH: integer(512, 64, 2048),
-  /** Abort child process if captured stdout/stderr exceeds this many bytes. */
+  /** Abort child process if captured stdout exceeds this many bytes (stderr is only tailed for diagnostics). */
   PROCESS_MAX_STDOUT_BYTES: integer(4 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
   /** HTTP timeout passed to yt-dlp / gallery-dl. */
   DOWNLOADER_HTTP_TIMEOUT_SECONDS: integer(15, 1, 120),

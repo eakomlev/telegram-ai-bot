@@ -160,3 +160,22 @@ test('formatVideoRepostError unknown and non-Error stay access-first without pri
   assert.ok(!nonError.includes(`${videoLimits.maxDurationSeconds} сек.`), nonError);
   assert.ok(!nonError.includes(`${videoLimits.maxSizeMb} МБ`), nonError);
 });
+
+test('formatVideoRepostError does not leak stderr URLs or ERROR lines into user text', () => {
+  const text = formatVideoRepostError(
+    new Error('process failed: ERROR: [youtube] wYvJRVa7FCE: Sign in to confirm you’re not a bot. https://youtube.com/shorts/wYvJRVa7FCE /tmp/source.mp4'),
+    videoLimits,
+  );
+  assert.equal(text, 'Не удалось загрузить ролик: сервис ограничил доступ (проверка на бота или требуется вход).');
+  assert.ok(!text.includes('https://'), text);
+  assert.ok(!text.includes('ERROR:'), text);
+  assert.ok(!text.includes('/tmp/'), text);
+  assert.ok(!text.includes('wYvJRVa7FCE'), text);
+});
+
+test('formatVideoRepostError classifies process cancelled', () => {
+  const text = formatVideoRepostError(new Error('process cancelled'), videoLimits);
+  assert.ok(/загрузить/i.test(text), text);
+  assert.ok(!text.includes('сек.'), text);
+  assert.ok(!text.includes('МБ'), text);
+});

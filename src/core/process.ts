@@ -22,6 +22,9 @@ function killProcessTree(child: ChildProcess) {
 }
 
 function appendStderrTail(current: Buffer, chunk: Buffer): Buffer {
+  if (chunk.length >= STDERR_TAIL_BYTES) {
+    return Buffer.from(chunk.subarray(chunk.length - STDERR_TAIL_BYTES));
+  }
   const combined = Buffer.concat([current, chunk]);
   if (combined.length <= STDERR_TAIL_BYTES) return combined;
   return Buffer.from(combined.subarray(combined.length - STDERR_TAIL_BYTES));
