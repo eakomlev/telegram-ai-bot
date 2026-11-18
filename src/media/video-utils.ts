@@ -40,6 +40,43 @@ export function validateVideoMetadata(info: VideoMetadata, maxSeconds: number) {
   }
 }
 
+/** User-facing video download/repost errors; classify without blaming limits for anti-bot blocks. */
+export function formatVideoRepostError(
+  error: unknown,
+  limits: { maxDurationSeconds: number; maxSizeMb: number },
+): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const msg = raw.toLowerCase();
+
+  if (
+    msg === 'duration'
+    || /duration[-\s]?filter|filter[^\n]{0,80}duration|max-?duration|duration[^\n]{0,40}limit/i.test(raw)
+  ) {
+    return `Не удалось загрузить ролик: превышен лимит длительности (${limits.maxDurationSeconds} сек.).`;
+  }
+  if (msg === 'size' || /max-?filesize|file is larger than max-filesize/i.test(raw)) {
+    return `Не удалось загрузить ролик: превышен лимит размера (${limits.maxSizeMb} МБ).`;
+  }
+  if (msg === 'timeout' || /process timed out|timed out/i.test(raw)) {
+    return 'Не удалось загрузить ролик: истекло время ожидания.';
+  }
+  if (/process cancelled/i.test(raw)) {
+    return 'Не удалось загрузить ролик.';
+  }
+  if (
+    /sign in to confirm|not a bot|login required|please log in|http error 403|private video|video unavailable/i
+      .test(raw)
+  ) {
+    return 'Не удалось загрузить ролик: сервис ограничил доступ (проверка на бота или требуется вход).';
+  }
+  if (msg === 'missing video') return 'Не удалось загрузить ролик: файл видео не найден.';
+  if (msg === 'incomplete video') return 'Не удалось загрузить ролик: видео обработано неполностью.';
+  if (msg === 'dimensions') return 'Не удалось загрузить ролик: некорректные размеры видео.';
+  if (msg === 'unsupported') return 'Не удалось загрузить ролик: этот тип публикации не поддерживается.';
+
+  return 'Не удалось загрузить ролик. Возможно, публикация закрыта или сервис ограничил доступ.';
+}
+
 export function videoCaption(info: VideoMetadata, source: VideoSource): string {
   const lines = [source.platform, clean(info.title, 160)];
   const author = clean(info.uploader ?? info.channel, 100);
