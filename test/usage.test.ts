@@ -67,13 +67,14 @@ const sampleTotal = {
   estimatedCostUsd: 0.2,
 };
 
-test('formatUsageReport includes current month and totals', () => {
+test('formatUsageReport includes current month and totals without dollars', () => {
   const text = formatUsageReport(sampleMonth, sampleTotal);
-  assert.match(text, /Текущий месяц \(МСК\)/);
-  assert.match(text, /токены:/);
-  assert.match(text, /\$0\.012/);
+  assert.match(text, /Текущий месяц \(МСК\): 1\.9k токенов/);
+  assert.match(text, /токены: 1\.9k \(in 1\.5k \/ out 400\)/);
+  assert.match(text, /За всё время хранения: 25\.0k токенов/);
   assert.match(text, /саммари 1/);
-  assert.match(text, /не счёт/i);
+  assert.doesNotMatch(text, /\$/);
+  assert.doesNotMatch(text, /Цены:/);
   assert.doesNotMatch(text, /Сегодня \(UTC\)/);
 });
 

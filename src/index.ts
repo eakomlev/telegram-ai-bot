@@ -65,7 +65,7 @@ const help = `Я сохраняю текстовые сообщения и по�
 /gif — по последним сообщениям подобрать шуточную GIF-реакцию
 /gif 40 — то же по 40 сообщениям (можно 24h / 7d)
 /settings — настройки группы (только администраторы)
-/usage — оценка расходов OpenAI по этой группе за текущий месяц (МСК) и всего (админы)
+/usage — токены OpenAI по этой группе за текущий месяц (МСК) и всего (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
 
@@ -476,7 +476,7 @@ try {
     { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
     { command: 'gif', description: 'Шуточная GIF по последним сообщениям' },
     { command: 'settings', description: 'Настройки группы (админы)' },
-    { command: 'usage', description: 'Расходы OpenAI по группе (админы)' },
+    { command: 'usage', description: 'Токены OpenAI по группе (админы)' },
     { command: 'help', description: 'Как пользоваться ботом' },
     { command: 'privacy', description: 'Обработка данных' },
     { command: 'chatid', description: 'ID этой группы' },
