@@ -39,7 +39,7 @@ test('formatUsd picks precision by magnitude', () => {
   assert.equal(formatUsd(1.2), '$1.20');
 });
 
-const sampleToday = {
+const sampleMonth = {
   requests: 2,
   summaryRequests: 1,
   mentionRequests: 1,
@@ -52,6 +52,7 @@ const sampleToday = {
   imageCount: 1,
   estimatedCostUsd: 0.012,
 };
+const sampleToday = sampleMonth;
 const sampleTotal = {
   requests: 10,
   summaryRequests: 4,
@@ -66,12 +67,13 @@ const sampleTotal = {
   estimatedCostUsd: 0.2,
 };
 
-test('formatUsageReport includes today and totals', () => {
-  const text = formatUsageReport(sampleToday, sampleTotal);
-  assert.match(text, /Сегодня \(UTC\)/);
-  assert.match(text, /\$0\.012/);
-  assert.match(text, /саммари 1/);
-  assert.match(text, /не счёт/i);
+test('formatUsageReport is a short month token summary', () => {
+  const text = formatUsageReport(sampleMonth);
+  assert.equal(
+    text,
+    'Статистика по группе за текущий месяц:\nПотрачено: 1.9k токенов',
+  );
+  assert.doesNotMatch(text, /\$|запросов:|картинки:|За всё время/);
 });
 
 test('formatOwnerUsageReport lists chats across groups', () => {
@@ -83,6 +85,7 @@ test('formatOwnerUsageReport lists chats across groups', () => {
     members: 42,
   }], { newToday: 1, total: 4, members: 120 });
   assert.match(text, /по всем группам/i);
+  assert.match(text, /Сегодня \(UTC\)/);
   assert.match(text, /новых групп: 1/);
   assert.match(text, /всего групп: 4/);
   assert.match(text, /участников: 120/);

@@ -65,16 +65,11 @@ function formatPeriod(label: string, totals: OpenAiUsageTotals, extraLines: stri
   ].join('\n');
 }
 
-export function formatUsageReport(today: OpenAiUsageTotals, total: OpenAiUsageTotals) {
+export function formatUsageReport(month: OpenAiUsageTotals) {
+  const tokens = month.promptTokens + month.completionTokens;
   return [
-    'Расходы OpenAI по этой группе (оценка по токенам и ценам из env):',
-    '',
-    formatPeriod('Сегодня (UTC)', today),
-    '',
-    formatPeriod('За всё время хранения', total),
-    '',
-    `Цены: текст in $${config.OPENAI_INPUT_USD_PER_1M_TOKENS}/1M, out $${config.OPENAI_OUTPUT_USD_PER_1M_TOKENS}/1M; картинка $${config.OPENAI_IMAGE_USD}.`,
-    'Это не счёт из кабинета OpenAI — ориентир для сравнения чатов.',
+    'Статистика по группе за текущий месяц:',
+    `Потрачено: ${formatTokens(tokens)} токенов`,
   ].join('\n');
 }
 

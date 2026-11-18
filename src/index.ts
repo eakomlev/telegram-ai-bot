@@ -65,7 +65,7 @@ const help = `Я сохраняю текстовые сообщения и по�
 /gif — по последним сообщениям подобрать шуточную GIF-реакцию
 /gif 40 — то же по 40 сообщениям (можно 24h / 7d)
 /settings — настройки группы (только администраторы)
-/usage — оценка расходов OpenAI по этой группе (админы)
+/usage — токены OpenAI по группе за текущий месяц (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
 
@@ -135,13 +135,8 @@ bot.command('settings', (ctx) => replyWithSettings(ctx));
 bot.command('usage', async (ctx) => {
   if (!(await requireChatAdmin(ctx))) return;
   const chatId = ctx.chat!.id;
-  const startOfUtcDay = new Date();
-  startOfUtcDay.setUTCHours(0, 0, 0, 0);
-  const [today, total] = await Promise.all([
-    getOpenAiUsageTotals(chatId, startOfUtcDay),
-    getOpenAiUsageTotals(chatId),
-  ]);
-  await ctx.reply(formatUsageReport(today, total), { link_preview_options: { is_disabled: true } });
+  const month = await getOpenAiUsageTotals(chatId, moscowMonthStart());
+  await ctx.reply(formatUsageReport(month), { link_preview_options: { is_disabled: true } });
 });
 bot.command('costs', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
@@ -477,7 +472,7 @@ try {
     { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
     { command: 'gif', description: 'Шуточная GIF по последним сообщениям' },
     { command: 'settings', description: 'Настройки группы (админы)' },
-    { command: 'usage', description: 'Расходы OpenAI по группе (админы)' },
+    { command: 'usage', description: 'Токены OpenAI по группе (админы)' },
     { command: 'help', description: 'Как пользоваться ботом' },
     { command: 'privacy', description: 'Обработка данных' },
     { command: 'chatid', description: 'ID этой группы' },
