@@ -115,7 +115,7 @@ test('sumOrganizationUsageTokens sums completions input and output', () => {
   assert.equal(totals.totalTokens, 1800);
 });
 
-test('formatOrganizationCostsReport uses Russian billing wording', () => {
+test('formatOrganizationCostsReport uses Russian stats wording', () => {
   const text = formatOrganizationCostsReport({
     periodStartMoscow: '2026-03-01',
     totalValue: 12.34,
@@ -125,13 +125,20 @@ test('formatOrganizationCostsReport uses Russian billing wording', () => {
     outputTokens: 2500,
     truncated: false,
   });
-  assert.match(text, /Расходы организации OpenAI \(биллинг Admin API\):/);
-  assert.match(text, /Период: 2026-03-01 … сейчас \(Europe\/Moscow\)/);
-  assert.match(text, /Итого: \$12\.34 USD/);
-  assert.match(text, /Токены: 12500 \(in 10000 \/ out 2500\)/);
-  assert.match(text, /Дней с данными: 12/);
-  assert.match(text, /не оценка бота из \/usage/);
+  assert.equal(
+    text,
+    [
+      'Статистика по OpenAI',
+      '',
+      'Период: 2026-03-01 … сейчас',
+      'Итого: $12.34 USD',
+      'Токены: 12500 (in 10000 / out 2500)',
+      'Дней с данными: 12',
+    ].join('\n'),
+  );
+  assert.doesNotMatch(text, /\/usage/);
   assert.doesNotMatch(text, /\/stats/);
+  assert.doesNotMatch(text, /Europe\/Moscow/);
 });
 
 function jsonResponse(body: OrganizationCostsPage | OrganizationUsagePage, status = 200): Response {

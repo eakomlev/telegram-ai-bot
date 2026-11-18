@@ -135,13 +135,12 @@ export function formatOrganizationCostsReport(report: OrganizationCostsReport): 
   const currencyLabel = report.currency.trim().toUpperCase() || 'USD';
   const tokens = report.inputTokens + report.outputTokens;
   return [
-    'Расходы организации OpenAI (биллинг Admin API):',
-    `Период: ${report.periodStartMoscow} … сейчас (Europe/Moscow)`,
+    'Статистика по OpenAI',
+    '',
+    `Период: ${report.periodStartMoscow} … сейчас`,
     `Итого: ${formatUsd(report.totalValue)} ${currencyLabel}`,
     `Токены: ${tokens} (in ${report.inputTokens} / out ${report.outputTokens})`,
     `Дней с данными: ${report.daysWithData}`,
-    '',
-    'Это официальный биллинг организации OpenAI, а не оценка бота из /usage.',
   ].join('\n');
 }
 
