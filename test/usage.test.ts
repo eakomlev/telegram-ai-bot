@@ -38,7 +38,7 @@ test('formatUsd picks precision by magnitude', () => {
   assert.equal(formatUsd(1.2), '$1.20');
 });
 
-const sampleToday = {
+const sampleMonth = {
   requests: 2,
   summaryRequests: 1,
   mentionRequests: 1,
@@ -51,26 +51,14 @@ const sampleToday = {
   imageCount: 1,
   estimatedCostUsd: 0.012,
 };
-const sampleTotal = {
-  requests: 10,
-  summaryRequests: 4,
-  mentionRequests: 6,
-  gifRequests: 0,
-  newsRequests: 0,
-  autoAnswerRequests: 0,
-  personalizationRequests: 0,
-  promptTokens: 20000,
-  completionTokens: 5000,
-  imageCount: 3,
-  estimatedCostUsd: 0.2,
-};
 
-test('formatUsageReport includes today and totals', () => {
-  const text = formatUsageReport(sampleToday, sampleTotal);
-  assert.match(text, /Сегодня \(UTC\)/);
-  assert.match(text, /\$0\.012/);
-  assert.match(text, /саммари 1/);
-  assert.match(text, /не счёт/i);
+test('formatUsageReport is a short month token summary', () => {
+  const text = formatUsageReport(sampleMonth);
+  assert.equal(
+    text,
+    'Статистика по группе за текущий месяц:\nПотрачено: 1.9k токенов',
+  );
+  assert.doesNotMatch(text, /\$|запросов:|картинки:|За всё время/);
 });
 
 test('formatOwnerStatsReport skeleton and chat lines', () => {

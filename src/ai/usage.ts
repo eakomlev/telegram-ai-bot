@@ -53,27 +53,11 @@ function formatTokens(value: number) {
   return String(value);
 }
 
-function formatPeriod(label: string, totals: OpenAiUsageTotals, extraLines: string[] = []) {
-  const tokens = totals.promptTokens + totals.completionTokens;
+export function formatUsageReport(month: OpenAiUsageTotals) {
+  const tokens = month.promptTokens + month.completionTokens;
   return [
-    `${label}: ${formatUsd(totals.estimatedCostUsd)}`,
-    `  запросов: ${totals.requests} (саммари ${totals.summaryRequests}, @упоминания ${totals.mentionRequests}, gif ${totals.gifRequests}, новости ${totals.newsRequests}, автоответ ${totals.autoAnswerRequests}, персонализация ${totals.personalizationRequests})`,
-    `  токены: ${formatTokens(tokens)} (in ${formatTokens(totals.promptTokens)} / out ${formatTokens(totals.completionTokens)})`,
-    `  картинки: ${totals.imageCount}`,
-    ...extraLines.map((line) => `  ${line}`),
-  ].join('\n');
-}
-
-export function formatUsageReport(today: OpenAiUsageTotals, total: OpenAiUsageTotals) {
-  return [
-    'Расходы OpenAI по этой группе (оценка по токенам и ценам из env):',
-    '',
-    formatPeriod('Сегодня (UTC)', today),
-    '',
-    formatPeriod('За всё время хранения', total),
-    '',
-    `Цены: текст in $${config.OPENAI_INPUT_USD_PER_1M_TOKENS}/1M, out $${config.OPENAI_OUTPUT_USD_PER_1M_TOKENS}/1M; картинка $${config.OPENAI_IMAGE_USD}.`,
-    'Это не счёт из кабинета OpenAI — ориентир для сравнения чатов.',
+    'Статистика по группе за текущий месяц:',
+    `Потрачено: ${formatTokens(tokens)} токенов`,
   ].join('\n');
 }
 
