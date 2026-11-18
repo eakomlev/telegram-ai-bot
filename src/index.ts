@@ -65,7 +65,7 @@ const help = `Я сохраняю текстовые сообщения и по�
 /gif — по последним сообщениям подобрать шуточную GIF-реакцию
 /gif 40 — то же по 40 сообщениям (можно 24h / 7d)
 /settings — настройки группы (только администраторы)
-/usage — оценка расходов OpenAI по этой группе (админы)
+/usage — оценка расходов OpenAI по этой группе за текущий месяц (МСК) и всего (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
 
@@ -135,13 +135,12 @@ bot.command('settings', (ctx) => replyWithSettings(ctx));
 bot.command('usage', async (ctx) => {
   if (!(await requireChatAdmin(ctx))) return;
   const chatId = ctx.chat!.id;
-  const startOfUtcDay = new Date();
-  startOfUtcDay.setUTCHours(0, 0, 0, 0);
-  const [today, total] = await Promise.all([
-    getOpenAiUsageTotals(chatId, startOfUtcDay),
+  const startOfMonth = moscowMonthStart();
+  const [month, total] = await Promise.all([
+    getOpenAiUsageTotals(chatId, startOfMonth),
     getOpenAiUsageTotals(chatId),
   ]);
-  await ctx.reply(formatUsageReport(today, total), { link_preview_options: { is_disabled: true } });
+  await ctx.reply(formatUsageReport(month, total), { link_preview_options: { is_disabled: true } });
 });
 bot.command('costs', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;

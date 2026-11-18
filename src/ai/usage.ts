@@ -65,11 +65,11 @@ function formatPeriod(label: string, totals: OpenAiUsageTotals, extraLines: stri
   ].join('\n');
 }
 
-export function formatUsageReport(today: OpenAiUsageTotals, total: OpenAiUsageTotals) {
+export function formatUsageReport(month: OpenAiUsageTotals, total: OpenAiUsageTotals) {
   return [
     'Расходы OpenAI по этой группе (оценка по токенам и ценам из env):',
     '',
-    formatPeriod('Сегодня (UTC)', today),
+    formatPeriod('Текущий месяц (МСК)', month),
     '',
     formatPeriod('За всё время хранения', total),
     '',
