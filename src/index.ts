@@ -10,15 +10,10 @@ import {
   cleanup,
   deleteMessage,
   ensureChatSettingsDefaults,
-  getGlobalOpenAiUsageTotals,
-  getOpenAiUsageByChat,
   getOpenAiUsageTotals,
   countNewOpenAiUsageChats,
-  countOpenAiUsageChats,
-  getLatestChatMemberCounts,
-  getTotalLatestChatMembers,
-  listChatParticipantsWithCharacteristics,
-  listChatsWithCharacteristicsForStats,
+  listChatStatsForOwner,
+  sumNewChatMembersSince,
   recordOpenAiUsage,
   upsertChatParticipant,
 } from './core/db.js';
@@ -26,9 +21,9 @@ import { migrate } from './core/migrate.js';
 import { summarize, type SummaryStyle } from './ai/ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary/summary.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
-import { formatOwnerParticipantsReport, formatOwnerUsageReport, formatUsageReport } from './ai/usage.js';
+import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
 import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/openai-costs.js';
-import { moscowMonthStart } from './core/moscow-time.js';
+import { moscowDateString, moscowMonthStart } from './core/moscow-time.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
 import { startStatus } from './core/status.js';
 
@@ -89,7 +84,8 @@ function isBotOwner(ctx: Context) {
   return Boolean(ownerUserId && ctx.from?.id === ownerUserId && !ctx.msg?.sender_chat);
 }
 
-async function chatUsageLabel(chatId: number) {
+/** Telegram title with chat id in parentheses; otherwise the numeric chat id. */
+async function chatTitleOrId(chatId: number) {
   try {
     const chat = await bot.api.getChat(chatId);
     const title = 'title' in chat && chat.title ? chat.title : undefined;
@@ -178,63 +174,26 @@ bot.command('stats', async (ctx) => {
     await ctx.reply('Задайте OWNER_USER_ID в .env и перезапустите бота.');
     return;
   }
-  const startOfUtcDay = new Date();
-  startOfUtcDay.setUTCHours(0, 0, 0, 0);
-  const [today, total, chatRows, todayByChat, newGroupsToday, totalGroups, memberCounts, totalMembers] = await Promise.all([
-    getGlobalOpenAiUsageTotals(startOfUtcDay),
-    getGlobalOpenAiUsageTotals(),
-    getOpenAiUsageByChat(undefined, 30),
-    getOpenAiUsageByChat(startOfUtcDay, 100),
-    countNewOpenAiUsageChats(startOfUtcDay),
-    countOpenAiUsageChats(),
-    getLatestChatMemberCounts(),
-    getTotalLatestChatMembers(),
+  const monthStart = moscowMonthStart();
+  const monthStartDate = moscowDateString(monthStart);
+  const [newChatsThisMonth, newMembersThisMonth, chatRows] = await Promise.all([
+    countNewOpenAiUsageChats(monthStart),
+    sumNewChatMembersSince(monthStartDate),
+    listChatStatsForOwner(),
   ]);
-  const todayMap = new Map(todayByChat.map((row) => [row.chatId, row]));
-  const emptyToday = {
-    requests: 0,
-    summaryRequests: 0,
-    mentionRequests: 0,
-    gifRequests: 0,
-    newsRequests: 0,
-    autoAnswerRequests: 0,
-    personalizationRequests: 0,
-    promptTokens: 0,
-    completionTokens: 0,
-    imageCount: 0,
-    estimatedCostUsd: 0,
-  };
-  const chats = await Promise.all(chatRows.map(async (row) => ({
-    chatId: row.chatId,
-    label: await chatUsageLabel(row.chatId),
-    today: todayMap.get(row.chatId) ?? emptyToday,
-    total: row,
-    members: memberCounts.get(row.chatId),
-  })));
-  const report = formatOwnerUsageReport(today, total, chats, {
-    newToday: newGroupsToday,
-    total: totalGroups,
-    members: totalMembers,
-  });
-  const characteristicChatIds = await listChatsWithCharacteristicsForStats(30);
-  const participantChats = await Promise.all(
-    characteristicChatIds.map(async (chatId) => {
-      const participants = await listChatParticipantsWithCharacteristics(
-        chatId,
-        config.PERSONALIZATION_MAX_USERS_PER_CHAT,
-      );
-      return {
-        label: await chatUsageLabel(chatId),
-        participants: participants.map((p) => ({
-          displayName: p.displayName,
-          username: p.username,
-          characteristic: p.characteristic ?? '',
-        })),
-      };
-    }),
+  const chats = await Promise.all(
+    chatRows.map(async (row) => ({
+      name: await chatTitleOrId(row.chatId),
+      members: row.members,
+      tokens: row.tokens,
+    })),
   );
-  const fullReport = [report, '', formatOwnerParticipantsReport(participantChats)].join('\n');
-  for (const part of splitReply(fullReport, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
+  const report = formatOwnerStatsReport({
+    newChatsThisMonth,
+    newMembersThisMonth,
+    chats,
+  });
+  for (const part of splitReply(report, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
     await ctx.reply(part, { link_preview_options: { is_disabled: true } });
   }
 });
@@ -481,7 +440,7 @@ try {
   await bot.api.setMyCommands(groupCommands, { scope: { type: 'all_group_chats' } });
   await bot.api.setMyCommands(
     [
-      { command: 'stats', description: 'Оценка расходов OpenAI по всем группам' },
+      { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
       { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
       { command: 'personalize', description: 'Запуск персонализации участников' },
     ],

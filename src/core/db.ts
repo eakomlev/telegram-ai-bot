@@ -135,28 +135,6 @@ export async function getOpenAiUsageTotals(chatId: number, since?: Date): Promis
   return mapUsageTotals(result.rows[0]);
 }
 
-export async function getGlobalOpenAiUsageTotals(since?: Date): Promise<OpenAiUsageTotals> {
-  const result = await pool.query<UsageTotalsRow>(
-    `SELECT ${USAGE_TOTALS_SELECT}
-     FROM openai_usage
-     WHERE ($1::timestamptz IS NULL OR created_at >= $1)`,
-    [since ?? null],
-  );
-  return mapUsageTotals(result.rows[0]);
-}
-
-export type OpenAiUsageChatRow = OpenAiUsageTotals & { chatId: number };
-
-export async function countOpenAiUsageChats(since?: Date): Promise<number> {
-  const result = await pool.query<{ count: string }>(
-    `SELECT COUNT(DISTINCT chat_id)::text AS count
-     FROM openai_usage
-     WHERE ($1::timestamptz IS NULL OR created_at >= $1)`,
-    [since ?? null],
-  );
-  return Number(result.rows[0]?.count) || 0;
-}
-
 /** Groups whose first recorded OpenAI usage falls on/after `since`. */
 export async function countNewOpenAiUsageChats(since: Date): Promise<number> {
   const result = await pool.query<{ count: string }>(
@@ -172,19 +150,46 @@ export async function countNewOpenAiUsageChats(since: Date): Promise<number> {
   return Number(result.rows[0]?.count) || 0;
 }
 
-export async function getOpenAiUsageByChat(since?: Date, limit = 30): Promise<OpenAiUsageChatRow[]> {
-  const result = await pool.query<UsageTotalsRow & { chat_id: string }>(
-    `SELECT chat_id::text AS chat_id, ${USAGE_TOTALS_SELECT}
-     FROM openai_usage
-     WHERE ($1::timestamptz IS NULL OR created_at >= $1)
-     GROUP BY chat_id
-     ORDER BY SUM(estimated_cost_usd) DESC, COUNT(*) DESC
-     LIMIT $2`,
-    [since ?? null, limit],
+export type OwnerChatStatsRow = {
+  chatId: number;
+  tokens: number;
+  members?: number;
+};
+
+/**
+ * Per-chat token totals (prompt+completion, all retained history) and latest member count.
+ * Universe: chats with openai_usage OR chat_member_snapshots.
+ */
+export async function listChatStatsForOwner(): Promise<OwnerChatStatsRow[]> {
+  const result = await pool.query<{ chat_id: string; tokens: string; members: number | null }>(
+    `WITH usage_tokens AS (
+       SELECT chat_id,
+              COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS tokens
+       FROM openai_usage
+       GROUP BY chat_id
+     ),
+     latest_members AS (
+       SELECT DISTINCT ON (chat_id) chat_id, member_count
+       FROM chat_member_snapshots
+       ORDER BY chat_id, captured_on DESC
+     ),
+     all_chats AS (
+       SELECT chat_id FROM usage_tokens
+       UNION
+       SELECT chat_id FROM latest_members
+     )
+     SELECT a.chat_id::text AS chat_id,
+            COALESCE(u.tokens, 0)::text AS tokens,
+            m.member_count AS members
+     FROM all_chats a
+     LEFT JOIN usage_tokens u ON u.chat_id = a.chat_id
+     LEFT JOIN latest_members m ON m.chat_id = a.chat_id
+     ORDER BY COALESCE(u.tokens, 0) DESC, m.member_count DESC NULLS LAST, a.chat_id`,
   );
   return result.rows.map((row) => ({
     chatId: Number(row.chat_id),
-    ...mapUsageTotals(row),
+    tokens: Number(row.tokens) || 0,
+    members: typeof row.members === 'number' ? row.members : undefined,
   }));
 }
 
@@ -886,14 +891,30 @@ export async function saveChatMemberSnapshot(chatId: number, capturedOn: string,
   );
 }
 
-/** Latest known member count per chat (by captured_on). */
-export async function getLatestChatMemberCounts(): Promise<Map<number, number>> {
-  const result = await pool.query<{ chat_id: string; member_count: number }>(
-    `SELECT DISTINCT ON (chat_id) chat_id::text AS chat_id, member_count
-     FROM chat_member_snapshots
-     ORDER BY chat_id, captured_on DESC`,
+/**
+ * Sum of per-chat member growth since Moscow month-start date (`YYYY-MM-01`).
+ * Per chat: max(0, latest − baseline); baseline = latest snapshot with captured_on < monthStartDate.
+ * Chats without a baseline contribute 0.
+ */
+export async function sumNewChatMembersSince(monthStartDate: string): Promise<number> {
+  const result = await pool.query<{ total: string }>(
+    `WITH latest AS (
+       SELECT DISTINCT ON (chat_id) chat_id, member_count
+       FROM chat_member_snapshots
+       ORDER BY chat_id, captured_on DESC
+     ),
+     baseline AS (
+       SELECT DISTINCT ON (chat_id) chat_id, member_count
+       FROM chat_member_snapshots
+       WHERE captured_on < $1::date
+       ORDER BY chat_id, captured_on DESC
+     )
+     SELECT COALESCE(SUM(GREATEST(0, latest.member_count - baseline.member_count)), 0)::text AS total
+     FROM latest
+     INNER JOIN baseline ON baseline.chat_id = latest.chat_id`,
+    [monthStartDate],
   );
-  return new Map(result.rows.map((row) => [Number(row.chat_id), row.member_count]));
+  return Number(result.rows[0]?.total) || 0;
 }
 
 /** Latest known member count for one chat, or undefined if none. */
@@ -1002,38 +1023,6 @@ export async function listChatParticipants(
             characteristic_updated_at, characteristic_source_until, first_seen_at, last_seen_at, updated_at
      FROM chat_participants
      WHERE chat_id = $1
-     ORDER BY last_seen_at DESC
-     LIMIT $2`,
-    [String(chatId), limit],
-  );
-  return result.rows.map(mapChatParticipant);
-}
-
-/** Distinct chats that already have ≥1 non-empty characteristic, newest first. */
-export async function listChatsWithCharacteristicsForStats(maxChats = 30): Promise<number[]> {
-  const result = await pool.query<{ chat_id: string }>(
-    `SELECT chat_id::text AS chat_id
-     FROM chat_participants
-     WHERE characteristic IS NOT NULL AND btrim(characteristic) <> ''
-     GROUP BY chat_id
-     ORDER BY MAX(characteristic_updated_at) DESC NULLS LAST
-     LIMIT $1`,
-    [maxChats],
-  );
-  return result.rows.map((row) => Number(row.chat_id));
-}
-
-/** Participants with a non-empty characteristic, most recently seen first. */
-export async function listChatParticipantsWithCharacteristics(
-  chatId: number,
-  limit = config.PERSONALIZATION_MAX_USERS_PER_CHAT,
-): Promise<ChatParticipantRow[]> {
-  const result = await pool.query<ChatParticipantDbRow>(
-    `SELECT chat_id::text AS chat_id, user_id::text AS user_id, username, display_name, characteristic,
-            characteristic_updated_at, characteristic_source_until, first_seen_at, last_seen_at, updated_at
-     FROM chat_participants
-     WHERE chat_id = $1
-       AND characteristic IS NOT NULL AND btrim(characteristic) <> ''
      ORDER BY last_seen_at DESC
      LIMIT $2`,
     [String(chatId), limit],
@@ -1164,20 +1153,6 @@ export async function clearPersonalizationRunClaim(chatId: number, moscowDate: s
        AND personalization_last_run_on = $2::date`,
     [String(chatId), moscowDate],
   );
-}
-
-export async function getTotalLatestChatMembers(): Promise<number | undefined> {
-  const result = await pool.query<{ total: string; chats: string }>(
-    `SELECT COALESCE(SUM(member_count), 0)::text AS total, COUNT(*)::text AS chats
-     FROM (
-       SELECT DISTINCT ON (chat_id) member_count
-       FROM chat_member_snapshots
-       ORDER BY chat_id, captured_on DESC
-     ) AS latest`,
-  );
-  const chats = Number(result.rows[0]?.chats) || 0;
-  if (!chats) return;
-  return Number(result.rows[0]?.total) || 0;
 }
 
 export async function cleanup() {

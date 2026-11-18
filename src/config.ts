@@ -225,11 +225,11 @@ const schema = z.object({
   OPENAI_PERSONALIZATION_MODEL: z.string().default(''),
   /** Image generation model for mention-produced pictures. */
   OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-1-mini'),
-  /** Estimated USD per 1M input tokens for /stats and stored usage rows (not official billing). */
+  /** Estimated USD per 1M input tokens for stored usage rows (not official billing). */
   OPENAI_INPUT_USD_PER_1M_TOKENS: z.coerce.number().min(0).max(1000).default(2),
-  /** Estimated USD per 1M output tokens for /stats and stored usage rows. */
+  /** Estimated USD per 1M output tokens for stored usage rows. */
   OPENAI_OUTPUT_USD_PER_1M_TOKENS: z.coerce.number().min(0).max(1000).default(10),
-  /** Estimated USD per generated image for /stats and stored usage rows. */
+  /** Estimated USD per generated image for stored usage rows. */
   OPENAI_IMAGE_USD: z.coerce.number().min(0).max(10).default(0.011),
   /** Retention for openai_usage rows and chat_member_snapshots (days). */
   USAGE_RETENTION_DAYS: integer(90, 1, 3650),
