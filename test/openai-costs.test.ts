@@ -87,7 +87,8 @@ test('formatOrganizationCostsReport uses Russian billing wording', () => {
   assert.match(text, /Период: 2026-03-01 … сейчас \(Europe\/Moscow\)/);
   assert.match(text, /Итого: \$12\.34 USD/);
   assert.match(text, /Дней с данными: 12/);
-  assert.match(text, /не оценка бота из \/usage или \/stats/);
+  assert.match(text, /не оценка бота из \/usage/);
+  assert.doesNotMatch(text, /\/stats/);
 });
 
 function jsonResponse(body: OrganizationCostsPage, status = 200): Response {

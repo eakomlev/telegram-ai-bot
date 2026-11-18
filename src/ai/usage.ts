@@ -1,6 +1,5 @@
 import { config } from '../config.js';
 import type { OpenAiUsageTotals } from '../core/db.js';
-import { truncateText } from '../summary/summary.js';
 
 export type UsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer' | 'personalization';
 
@@ -78,74 +77,24 @@ export function formatUsageReport(today: OpenAiUsageTotals, total: OpenAiUsageTo
   ].join('\n');
 }
 
-export type OwnerUsageChatLine = {
-  chatId: number;
-  label: string;
-  today: OpenAiUsageTotals;
-  total: OpenAiUsageTotals;
-  members?: number;
-};
-
-export function formatOwnerUsageReport(
-  today: OpenAiUsageTotals,
-  total: OpenAiUsageTotals,
-  chats: OwnerUsageChatLine[],
-  groups: { newToday: number; total: number; members?: number },
-) {
-  const totalExtra = [`всего групп: ${groups.total}`];
-  totalExtra.push(
-    groups.members == null ? 'участников: —' : `участников: ${groups.members}`,
-  );
+/** Owner `/stats` report: month growth + per-chat members/tokens. */
+export function formatOwnerStatsReport(input: {
+  newChatsThisMonth: number;
+  newMembersThisMonth: number;
+  chats: Array<{ name: string; members?: number; tokens: number }>;
+}): string {
   const lines = [
-    'Расходы OpenAI по всем группам:',
-    '',
-    formatPeriod('Сегодня (UTC)', today, [`новых групп: ${groups.newToday}`]),
-    '',
-    formatPeriod('За всё время хранения', total, totalExtra),
+    '——',
+    'Новых в этом месяце',
+    `Чаты: ${input.newChatsThisMonth}`,
+    `Участники: ${input.newMembersThisMonth}`,
+    '——',
+    'Статистика чатов:',
   ];
-  if (chats.length) {
-    lines.push('', 'По группам (за срок хранения, дорогие сверху):');
-    for (const chat of chats) {
-      const members = typeof chat.members === 'number' ? `, ${chat.members} уч.` : '';
-      lines.push(
-        `• ${chat.label}: ${formatUsd(chat.total.estimatedCostUsd)}` +
-          ` (сегодня ${formatUsd(chat.today.estimatedCostUsd)},` +
-          ` запросов ${chat.total.requests}${members})`,
-      );
-    }
-  } else {
-    lines.push('', 'Пока нет записанных запросов OpenAI.');
+  for (const chat of input.chats) {
+    const members = typeof chat.members === 'number' ? String(chat.members) : '—';
+    lines.push(`${chat.name} - ${members} - ${chat.tokens}`);
   }
-  return lines.join('\n');
-}
-
-export type OwnerParticipantChatLine = {
-  label: string;
-  participants: { displayName: string; username: string | null; characteristic: string }[];
-};
-
-const DEFAULT_PARTICIPANT_CHARACTERISTIC_CHARS = 200;
-
-/** Owner `/stats` section: chats with saved participant characteristics. */
-export function formatOwnerParticipantsReport(
-  chats: OwnerParticipantChatLine[],
-  opts?: { maxCharacteristicChars?: number },
-): string {
-  if (!chats.length) {
-    return 'Пока нет сохранённых характеристик участников.';
-  }
-  const maxChars = opts?.maxCharacteristicChars ?? DEFAULT_PARTICIPANT_CHARACTERISTIC_CHARS;
-  const lines = ['Участники и характеристики:'];
-  for (const chat of chats) {
-    lines.push(`• ${chat.label}:`);
-    for (const participant of chat.participants) {
-      const name = participant.username
-        ? `${participant.displayName} (@${participant.username})`
-        : participant.displayName;
-      const collapsed = participant.characteristic.trim().replace(/\s+/g, ' ');
-      const text = truncateText(collapsed, maxChars);
-      lines.push(`  — ${name}: ${text}`);
-    }
-  }
+  lines.push('——');
   return lines.join('\n');
 }

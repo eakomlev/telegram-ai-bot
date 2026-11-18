@@ -84,7 +84,7 @@ export function formatOrganizationCostsReport(report: OrganizationCostsReport): 
     `Итого: ${formatUsd(report.totalValue)} ${currencyLabel}`,
     `Дней с данными: ${report.daysWithData}`,
     '',
-    'Это официальный биллинг организации OpenAI, а не оценка бота из /usage или /stats.',
+    'Это официальный биллинг организации OpenAI, а не оценка бота из /usage.',
   ].join('\n');
 }
 
