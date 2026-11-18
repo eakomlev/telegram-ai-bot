@@ -67,15 +67,13 @@ const sampleTotal = {
   estimatedCostUsd: 0.2,
 };
 
-test('formatUsageReport includes current month and totals without dollars', () => {
-  const text = formatUsageReport(sampleMonth, sampleTotal);
-  assert.match(text, /Текущий месяц \(МСК\): 1\.9k токенов/);
-  assert.match(text, /токены: 1\.9k \(in 1\.5k \/ out 400\)/);
-  assert.match(text, /За всё время хранения: 25\.0k токенов/);
-  assert.match(text, /саммари 1/);
-  assert.doesNotMatch(text, /\$/);
-  assert.doesNotMatch(text, /Цены:/);
-  assert.doesNotMatch(text, /Сегодня \(UTC\)/);
+test('formatUsageReport is a short month token summary', () => {
+  const text = formatUsageReport(sampleMonth);
+  assert.equal(
+    text,
+    'Статистика по группе за текущий месяц:\nПотрачено: 1.9k токенов',
+  );
+  assert.doesNotMatch(text, /\$|запросов:|картинки:|За всё время/);
 });
 
 test('formatOwnerUsageReport lists chats across groups', () => {
