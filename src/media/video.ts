@@ -5,7 +5,7 @@ import { InputFile, type Context } from 'grammy';
 import { config } from '../config.js';
 import { deleteVideoCache, getVideoCache, saveVideoCache } from '../core/db.js';
 import { runProcess } from '../core/process.js';
-import { parseVideoLink, validateVideoMetadata, type VideoMetadata } from './video-utils.js';
+import { formatVideoRepostError, parseVideoLink, validateVideoMetadata, type VideoMetadata } from './video-utils.js';
 
 import { resolveChatSettings } from '../chat/chat-settings.js';
 import { enqueueMedia, mediaSignal, mediaClosing } from '../core/media-jobs.js';
@@ -125,10 +125,13 @@ async function repost(ctx: Context, source: NonNullable<ReturnType<typeof parseV
         duration: Math.round(outputDuration),
       }).catch(() => console.error('Video cache save failed'));
     }
-  } catch {
+  } catch (error) {
     if (!mediaClosing()) {
-      console.error('Video repost failed', { chatId: ctx.chat?.id, platform: source.platform });
-      const errorText = `Не удалось загрузить ролик. Возможно, публикация закрыта, сервис ограничил доступ или превышены лимиты (${config.VIDEO_MAX_DURATION_SECONDS} сек., ${config.VIDEO_MAX_SIZE_MB} МБ).`;
+      console.error('Video repost failed', { chatId: ctx.chat?.id, platform: source.platform, error });
+      const errorText = formatVideoRepostError(error, {
+        maxDurationSeconds: config.VIDEO_MAX_DURATION_SECONDS,
+        maxSizeMb: config.VIDEO_MAX_SIZE_MB,
+      });
       if (status) await status.fail(errorText);
       else await ctx.reply(errorText, reply).catch(() => {});
     }

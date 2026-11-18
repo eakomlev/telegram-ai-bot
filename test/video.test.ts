@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseVideoLink, validateVideoMetadata, videoCaption } from '../src/media/video-utils.js';
+import { formatVideoRepostError, parseVideoLink, validateVideoMetadata, videoCaption } from '../src/media/video-utils.js';
 import { runProcess } from '../src/core/process.js';
 
 test('recognizes only standalone short-video links on supported hosts', () => {
@@ -48,6 +48,48 @@ test('process runner rejects nonzero exit', async () => {
   await assert.rejects(runProcess(process.execPath, ['-e', 'process.exit(7)'], 2000), /process failed/);
 });
 
+test('process runner includes distinctive stderr on nonzero exit', async () => {
+  const marker = 'YTDLP_BOT_CHECK_SIGN_IN_UNIQUE';
+  await assert.rejects(
+    runProcess(process.execPath, ['-e', `process.stderr.write(${JSON.stringify(marker)}); process.exit(1)`], 2000),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /process failed/);
+      assert.ok(error.message.includes(marker), error.message);
+      return true;
+    },
+  );
+});
+
+test('process runner bounds stderr in Error.message for huge stderr', async () => {
+  const started = Date.now();
+  await assert.rejects(
+    runProcess(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      const chunk = Buffer.alloc(64 * 1024, 0x41);
+      for (let i = 0; i < 40; i++) fs.writeSync(2, chunk);
+      fs.writeSync(2, 'TAIL_MARKER_XYZ');
+      process.exit(1);
+    `], 5000),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /process failed/);
+      assert.ok(error.message.length < 4096, `message too long: ${error.message.length}`);
+      assert.ok(error.message.includes('TAIL_MARKER_XYZ'), error.message);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started < 5000, 'huge stderr must not hang rejection');
+});
+
+test('process runner success ignores stderr noise and returns stdout only', async () => {
+  const out = await runProcess(process.execPath, ['-e', `
+    process.stderr.write('noise\\x00\\x01 warn\\n');
+    process.stdout.write('ok-payload');
+  `], 2000);
+  assert.equal(out, 'ok-payload');
+});
+
 test('process runner terminates a real process on timeout', async () => {
   const started = Date.now();
   await assert.rejects(runProcess(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], 100), /timed out/);
@@ -74,4 +116,47 @@ test('process timeout also terminates descendants holding stdout open', async ()
   const script = "const {spawn}=require('node:child_process'); spawn(process.execPath, ['-e','setTimeout(()=>{},10000)'], {stdio:['ignore','inherit','inherit']}); setTimeout(()=>{},10000);";
   await assert.rejects(runProcess(process.execPath, ['-e', script], 400), /timed out/);
   assert.ok(Date.now() - started < 5000, 'descendant must not retain the process pipes');
+});
+
+const videoLimits = { maxDurationSeconds: 180, maxSizeMb: 45 };
+
+test('formatVideoRepostError classifies bot-check without limit numbers', () => {
+  const text = formatVideoRepostError(
+    new Error('process failed: ERROR: Sign in to confirm you’re not a bot'),
+    videoLimits,
+  );
+  assert.ok(text.includes('доступ') || /огранич|бот|вход/i.test(text), text);
+  assert.ok(!text.includes('сек.'), text);
+  assert.ok(!text.includes('МБ'), text);
+  assert.ok(!/cookie/i.test(text), text);
+});
+
+test('formatVideoRepostError classifies duration and size limits', () => {
+  const duration = formatVideoRepostError(new Error('duration'), videoLimits);
+  assert.ok(duration.includes(`${videoLimits.maxDurationSeconds} сек.`), duration);
+  const size = formatVideoRepostError(new Error('size'), videoLimits);
+  assert.ok(size.includes(`${videoLimits.maxSizeMb} МБ`), size);
+  const filesize = formatVideoRepostError(
+    new Error('process failed: File is larger than max-filesize'),
+    videoLimits,
+  );
+  assert.ok(filesize.includes(`${videoLimits.maxSizeMb} МБ`), filesize);
+});
+
+test('formatVideoRepostError classifies timeout without false limit blame', () => {
+  const text = formatVideoRepostError(new Error('process timed out'), videoLimits);
+  assert.ok(/ожидания|тайм|время/i.test(text), text);
+  assert.ok(!text.includes('сек.'), text);
+  assert.ok(!text.includes('МБ'), text);
+});
+
+test('formatVideoRepostError unknown and non-Error stay access-first without primary limits', () => {
+  const unknown = formatVideoRepostError(new Error('process failed: some obscure extractor boom'), videoLimits);
+  assert.ok(/доступ|закрыт/i.test(unknown), unknown);
+  assert.ok(!unknown.includes(`${videoLimits.maxDurationSeconds} сек.`), unknown);
+  assert.ok(!unknown.includes(`${videoLimits.maxSizeMb} МБ`), unknown);
+  const nonError = formatVideoRepostError('weird', videoLimits);
+  assert.ok(/доступ|закрыт|загрузить/i.test(nonError), nonError);
+  assert.ok(!nonError.includes(`${videoLimits.maxDurationSeconds} сек.`), nonError);
+  assert.ok(!nonError.includes(`${videoLimits.maxSizeMb} МБ`), nonError);
 });
