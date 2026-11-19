@@ -26,6 +26,7 @@ import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/o
 import { moscowDateString, moscowMonthStart } from './core/moscow-time.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
 import { shouldPassPrivateMiddleware } from './core/private-gate.js';
+import { shouldSendBotJoinWelcome } from './chat/bot-join.js';
 import { startStatus } from './core/status.js';
 
 import { runGifReaction } from './gif/gif.js';
@@ -278,6 +279,31 @@ bot.on('callback_query:data', async (ctx) => {
   await ctx.answerCallbackQuery().catch(() => {});
 });
 
+bot.on('my_chat_member', async (ctx) => {
+  const u = ctx.myChatMember;
+  if (!u || !ctx.chat) return;
+  if (
+    !shouldSendBotJoinWelcome({
+      chatType: ctx.chat.type,
+      chatId: ctx.chat.id,
+      oldStatus: u.old_chat_member.status,
+      newStatus: u.new_chat_member.status,
+      allowedChatIds,
+    })
+  ) {
+    return;
+  }
+  try {
+    await ctx.reply(help);
+  } catch (error) {
+    console.error('Join welcome failed', {
+      chatId: ctx.chat.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+
 async function runSummary(ctx: Context, style: SummaryStyle) {
   const settings = await resolveChatSettings(ctx.chat!.id);
   let selection;
@@ -468,7 +494,7 @@ try {
     { scope: { type: 'all_private_chats' } },
   );
   await bot.start({
-    allowed_updates: ['message', 'edited_message', 'callback_query'],
+    allowed_updates: ['message', 'edited_message', 'callback_query', 'my_chat_member'],
     onStart: () => {
       console.log(`Telegram summary bot started as @${me.username}`);
       void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
