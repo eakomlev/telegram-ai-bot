@@ -23,7 +23,11 @@ import {
   selectManualPersonalizationChatIds,
   shouldRetryPersonalizationClaim,
 } from '../src/personalization/personalization-scheduler.js';
-import { shouldPassPrivateMiddleware } from '../src/core/private-gate.js';
+import {
+  privateBlockedReplyText,
+  shouldPassPrivateMiddleware,
+  shouldReplyToBlockedPrivate,
+} from '../src/core/private-gate.js';
 import {
   buildPersonalizePickerKeyboard,
   parsePersonalizeCallbackData,
@@ -271,6 +275,26 @@ test('shouldPassPrivateMiddleware allows callbacks and owner personalize command
     shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: 'hello', isOwner: true }),
     false,
   );
+});
+
+test('shouldReplyToBlockedPrivate only when message is present', () => {
+  assert.equal(shouldReplyToBlockedPrivate({ hasMessage: true }), true);
+  assert.equal(shouldReplyToBlockedPrivate({ hasMessage: false }), false);
+});
+
+test('privateBlockedReplyText: default redirect vs owner blocked slash command', () => {
+  const defaultReply =
+    'Добавьте меня в чат или группу, чтобы начать работу.\nВ @BotFather: /setprivacy → Disable.';
+  const ownerCmdReply =
+    'В личке доступны только /stats, /costs, /personalize и /personalize_results.';
+
+  assert.equal(privateBlockedReplyText({ isOwner: false, messageText: 'hi' }), defaultReply);
+  assert.equal(privateBlockedReplyText({ isOwner: false, messageText: '/help' }), defaultReply);
+  assert.equal(privateBlockedReplyText({ isOwner: false, messageText: '' }), defaultReply);
+  assert.equal(privateBlockedReplyText({ isOwner: true, messageText: 'hello' }), defaultReply);
+  assert.equal(privateBlockedReplyText({ isOwner: true, messageText: '' }), defaultReply);
+  assert.equal(privateBlockedReplyText({ isOwner: true, messageText: '/help' }), ownerCmdReply);
+  assert.equal(privateBlockedReplyText({ isOwner: true, messageText: '/unknown' }), ownerCmdReply);
 });
 
 test('isPersonalizationRunInProgress is idle by default', () => {

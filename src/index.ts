@@ -25,7 +25,11 @@ import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
 import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/openai-costs.js';
 import { moscowDateString, moscowMonthStart } from './core/moscow-time.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
-import { shouldPassPrivateMiddleware } from './core/private-gate.js';
+import {
+  privateBlockedReplyText,
+  shouldPassPrivateMiddleware,
+  shouldReplyToBlockedPrivate,
+} from './core/private-gate.js';
 import { buildCommandRegistrationPlan } from './core/bot-commands.js';
 import { shouldSendBotJoinWelcome } from './chat/bot-join.js';
 import { startStatus } from './core/status.js';
@@ -132,12 +136,8 @@ bot.use(async (ctx, next) => {
       await next();
       return;
     }
-    if (messageText.startsWith('/')) {
-      await ctx.reply(
-        ownerUserId && isOwner
-          ? 'В личке доступны только /stats, /costs, /personalize и /personalize_results.'
-          : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
-      );
+    if (shouldReplyToBlockedPrivate({ hasMessage: Boolean(ctx.message) })) {
+      await ctx.reply(privateBlockedReplyText({ isOwner, messageText }));
     }
     return;
   }
