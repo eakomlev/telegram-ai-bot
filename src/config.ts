@@ -223,6 +223,23 @@ const schema = z.object({
   PERSONALIZATION_BATCH_USERS: integer(10, 1, 50),
   /** Optional model for personalization drafts/merges; empty → OPENAI_MODEL. */
   OPENAI_PERSONALIZATION_MODEL: z.string().default(''),
+  /** Global gate for periodic chat GC (probe Telegram; purge DB for gone chats). */
+  CHAT_GC_ENABLED: bool.default('true'),
+  /** Chat GC scheduler poll interval (ms); ticks only act at CHAT_GC_HOURS_MOSCOW. */
+  CHAT_GC_TICK_INTERVAL_MS: integer(3600000, 60000, 86400000),
+  /** Comma-separated Moscow hours (0–23) when chat GC may run (≈2×/day). */
+  CHAT_GC_HOURS_MOSCOW: z.string().default('4,16').refine(
+    (value) => value.split(',').every((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return false;
+      if (!/^\d{1,2}$/.test(trimmed)) return false;
+      const hour = Number(trimmed);
+      return Number.isInteger(hour) && hour >= 0 && hour <= 23;
+    }),
+    'Expected comma-separated Moscow hours 0–23',
+  ),
+  /** Delay between getChat probes during a GC pass (ms). */
+  CHAT_GC_PROBE_DELAY_MS: integer(75, 0, 10000),
   /** Image generation model for mention-produced pictures. */
   OPENAI_IMAGE_MODEL: z.string().min(1).default('gpt-image-1-mini'),
   /** Estimated USD per 1M input tokens for stored usage rows (not official billing). */
@@ -249,6 +266,12 @@ if (config.GIF_DEFAULT_MESSAGE_COUNT > config.GIF_MAX_MESSAGE_COUNT) {
 /** Parsed ALLOWED_CHAT_IDS; empty set means all groups are allowed. */
 export const allowedChatIds = new Set(
   config.ALLOWED_CHAT_IDS.split(',').map((id) => id.trim()).filter(Boolean),
+);
+/** Parsed CHAT_GC_HOURS_MOSCOW (Moscow clock hours when GC may run). */
+export const chatGcHoursMoscow = new Set(
+  config.CHAT_GC_HOURS_MOSCOW.split(',')
+    .map((part) => Number(part.trim()))
+    .filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23),
 );
 /** Parsed OWNER_USER_ID, or undefined if unset. */
 export const ownerUserId = config.OWNER_USER_ID.trim()

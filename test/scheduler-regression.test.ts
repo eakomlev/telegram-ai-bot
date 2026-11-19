@@ -5,6 +5,7 @@ import { pool } from '../src/core/db.js';
 import { config } from '../src/config.js';
 import { cancelAutoAnswerForEdit } from '../src/auto-answer/auto-answer.js';
 import { runAutoAnswerSchedulerTick, stopAutoAnswerScheduler } from '../src/auto-answer/auto-answer-scheduler.js';
+import { runChatGcSchedulerTick, stopChatGcScheduler } from '../src/chat/chat-gc-scheduler.js';
 import { runNewsSchedulerTick, stopNewsScheduler } from '../src/news/news-scheduler.js';
 import {
   runPersonalizationSchedulerTick,
@@ -23,20 +24,26 @@ test('editing cancels only the original question even after removing its caption
   } finally { pool.query = query; }
 });
 
-test('both schedulers coalesce overlapping ticks and stop waits for work', async () => {
+test('schedulers coalesce overlapping ticks and stop waits for work', async () => {
   const originalQuery = pool.query;
   const oldAuto = config.AUTO_ANSWER_ENABLED;
   const oldNews = config.NEWS_ENABLED;
   const oldPersonalization = config.PERSONALIZATION_ENABLED;
+  const oldGc = config.CHAT_GC_ENABLED;
+  const oldGcDelay = config.CHAT_GC_PROBE_DELAY_MS;
   config.AUTO_ANSWER_ENABLED = 'true';
   config.NEWS_ENABLED = 'true';
   config.PERSONALIZATION_ENABLED = 'true';
+  config.CHAT_GC_ENABLED = 'true';
+  config.CHAT_GC_PROBE_DELAY_MS = 0;
   const personalizationNow = zonedMoscowTime(2024, 6, 1, 4, 0);
+  const chatGcNow = zonedMoscowTime(2024, 6, 1, 4, 0);
   try {
     for (const [run, stop, now] of [
       [runAutoAnswerSchedulerTick, stopAutoAnswerScheduler, undefined],
       [runNewsSchedulerTick, stopNewsScheduler, undefined],
       [runPersonalizationSchedulerTick, stopPersonalizationScheduler, personalizationNow],
+      [runChatGcSchedulerTick, stopChatGcScheduler, chatGcNow],
     ] as const) {
       let queries = 0;
       let release!: () => void;
@@ -59,6 +66,8 @@ test('both schedulers coalesce overlapping ticks and stop waits for work', async
     config.AUTO_ANSWER_ENABLED = oldAuto;
     config.NEWS_ENABLED = oldNews;
     config.PERSONALIZATION_ENABLED = oldPersonalization;
+    config.CHAT_GC_ENABLED = oldGc;
+    config.CHAT_GC_PROBE_DELAY_MS = oldGcDelay;
   }
 });
 

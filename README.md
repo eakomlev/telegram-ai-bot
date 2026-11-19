@@ -37,7 +37,7 @@ src/
   config.ts                # Zod + env
   core/                    # db, migrate.ts + migrations/, очереди AI/media, process, status, moscow-time
   ai/                      # OpenAI-вызовы, usage/$, openai-costs (Admin API /costs + usage tokens)
-  chat/                    # настройки чата, UI /settings, контекст, снимки участников
+  chat/                    # настройки чата, UI /settings, контекст, снимки участников, chat GC
   summary/                 # выборка и нарезка текста для саммари
   mention/                 # @упоминания и reply-to-bot
   auto-answer/             # очередь и планировщик автоответов
@@ -100,6 +100,10 @@ src/
 Глобальный `PERSONALIZATION_ENABLED`; в чате по умолчанию **вкл**. Ночной проход около `PERSONALIZATION_HOUR_MOSCOW` (МСК): анализ недавней переписки активных участников, черновики характеристик, merge в БД. Не работает при ≥ `PERSONALIZATION_MAX_CHAT_MEMBERS` участниках. Характеристики используются только во внутренних промптах @упоминаний/автоответов; отдельного «профиля обо мне» нет. Модель: `OPENAI_PERSONALIZATION_MODEL` или `OPENAI_MODEL`.
 
 Владелец может вручную запустить проход командой `/personalize` (или `/personalize <chat_id>`) в личке: игнорируются час МСК и same-day claim, но сохраняются глобальный/per-chat флаги, `ALLOWED_CHAT_IDS` и soft-skip по размеру чата / отсутствию сообщений. После успешного или soft-skip прохода дата `personalization_last_run_on` ставится на сегодня (МСК), чтобы ночной тик не дублировал работу.
+
+### Очистка недоступных чатов (chat GC)
+
+Глобальный `CHAT_GC_ENABLED`. Планировщик тикает каждые `CHAT_GC_TICK_INTERVAL_MS`, но реально работает только в часы МСК из `CHAT_GC_HOURS_MOSCOW` (по умолчанию `4,16` ≈ 2 раза в сутки). Для каждого известного `chat_id` вызывается `getChat`; при постоянной ошибке Telegram (403 / chat not found / kicked / not a member / upgraded) удаляются связанные строки в БД и черновики персонализации. `video_cache` не трогается. При 429 проход прерывается и слот не помечается выполненным (повтор на следующем тике). Пауза между зондами: `CHAT_GC_PROBE_DELAY_MS`.
 
 ### Видео
 
@@ -256,6 +260,15 @@ Inline-меню только для админов: саммари только 
 | `PERSONALIZATION_DRAFT_MAX_OUTPUT_TOKENS` | `1500` | Бюджет draft JSON на пачку |
 | `PERSONALIZATION_PROMPT_MAX_CHARS` | `3000` | Обрезка характеристики в промпте |
 | `PERSONALIZATION_BATCH_USERS` | `10` | Размер пачки пользователей |
+
+### Очистка чатов (chat GC)
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `CHAT_GC_ENABLED` | `true` | Глобальный gate |
+| `CHAT_GC_TICK_INTERVAL_MS` | `3600000` | Интервал тика планировщика |
+| `CHAT_GC_HOURS_MOSCOW` | `4,16` | Часы МСК, когда GC может бежать |
+| `CHAT_GC_PROBE_DELAY_MS` | `75` | Пауза между `getChat` |
 
 ### Media / process / downloaders
 

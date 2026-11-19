@@ -30,6 +30,7 @@ import { startStatus } from './core/status.js';
 import { runGifReaction } from './gif/gif.js';
 import { cancelPendingAutoAnswersForActivity, cancelAutoAnswerForEdit, maybeEnqueueAutoAnswer } from './auto-answer/auto-answer.js';
 import { startAutoAnswerScheduler, stopAutoAnswerScheduler } from './auto-answer/auto-answer-scheduler.js';
+import { startChatGcScheduler, stopChatGcScheduler } from './chat/chat-gc-scheduler.js';
 import { maybeHandleMention, setBotIdentity } from './mention/mention.js';
 import { maybeRepostVideo } from './media/video.js';
 import { maybeRepostGallery } from './media/gallery.js';
@@ -399,6 +400,7 @@ async function shutdown() {
     stopNewsScheduler(),
     stopAutoAnswerScheduler(),
     stopPersonalizationScheduler(),
+    stopChatGcScheduler(),
     aiJobs.stop(),
     stopMediaJobs(),
   ]);
@@ -426,6 +428,7 @@ try {
   setBotIdentity(me.id, me.username);
   startAutoAnswerScheduler(bot.api);
   startPersonalizationScheduler(bot.api);
+  startChatGcScheduler(bot.api);
   const groupCommands = [
     { command: 'summary', description: 'Саммари: N, 24h или 7d' },
     { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },

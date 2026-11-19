@@ -19,7 +19,7 @@ import {
   type PendingAutoAnswer,
 } from '../core/db.js';
 import { getBotAuthorLabel, resolveInterlocutorCharacteristic } from '../mention/mention.js';
-import { isPermanentTelegramDeliveryError } from '../news/news-scheduler.js';
+import { isPermanentTelegramDeliveryError } from '../chat/telegram-errors.js';
 
 let autoAnswerTimer: NodeJS.Timeout | undefined;
 let runningTick: Promise<void> | undefined;
