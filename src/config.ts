@@ -163,6 +163,12 @@ const schema = z.object({
   MENTION_CONTEXT_LOOKBACK_MINUTES: integer(10, 1, 1440),
   /** Max characters of preceding context included in a mention prompt. */
   MENTION_CONTEXT_MAX_CHARS: integer(500, 0, 50000),
+  /**
+   * true = mention replies via Responses API + hosted web_search (tool_choice auto);
+   * false = Chat Completions without web. Memes / image-gen stay on Completions.
+   * Search context size reuses NEWS_SEARCH_CONTEXT_SIZE.
+   */
+  MENTION_WEB_SEARCH: bool.default('true'),
   /** Global gate for daily news scheduler (per-chat news still opt-in). */
   NEWS_ENABLED: bool.default('true'),
   /** Max tokens for a daily news post. */

@@ -6,6 +6,7 @@ import {
   buildNewsSystemPrompt,
   buildNewsUserPrompt,
   buildNewsWebSearchTool,
+  buildWebSearchTool,
   mapResponsesUsage,
   newsModel,
   newsResponsesReasoningOptions,
@@ -48,7 +49,7 @@ test('news user prompt asks for web search only when enabled', () => {
 });
 
 test('news web_search tool payload uses RU / Moscow and configured context size', () => {
-  const tool = buildNewsWebSearchTool();
+  const tool = buildWebSearchTool();
   assert.equal(tool.type, 'web_search');
   assert.equal(tool.search_context_size, config.NEWS_SEARCH_CONTEXT_SIZE);
   assert.deepEqual(tool.user_location, {
@@ -56,12 +57,13 @@ test('news web_search tool payload uses RU / Moscow and configured context size'
     country: 'RU',
     timezone: 'Europe/Moscow',
   });
+  assert.deepEqual(buildNewsWebSearchTool(), buildWebSearchTool());
 });
 
 test('Responses news params include tools, forced tool_choice, and gated low reasoning', () => {
   const params = buildNewsResponsesCreateParams('games', 'Игры', '2026-11-17');
   assert.equal(params.model, newsModel());
-  assert.deepEqual(params.tools, [buildNewsWebSearchTool()]);
+  assert.deepEqual(params.tools, [buildWebSearchTool()]);
   assert.equal(params.max_output_tokens, config.NEWS_MAX_OUTPUT_TOKENS);
   assert.deepEqual(newsResponsesReasoningOptions('gpt-6-sol'), { reasoning: { effort: 'low' } });
   assert.deepEqual(newsResponsesReasoningOptions('gpt-4.1-mini'), {});

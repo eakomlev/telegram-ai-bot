@@ -1,6 +1,6 @@
 import { InputFile, type Api, type Context } from 'grammy';
 import type { Message, MessageEntity } from 'grammy/types';
-import { replyToMention, type MentionInputImage } from '../ai/ai.js';
+import { mentionUsesWebSearch, replyToMention, type MentionInputImage } from '../ai/ai.js';
 import {
   formatContextLine,
   trimPrecedingContext,
@@ -377,7 +377,12 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
       ...(message.message_thread_id ? { message_thread_id: message.message_thread_id } : {}),
     };
     const memeMode = isMemeRequest(userText);
-    const status = await startStatus(ctx, memeMode ? '⏳ Делаю мем…' : '⏳ Думаю…', reply);
+    const statusText = memeMode
+      ? '⏳ Делаю мем…'
+      : mentionUsesWebSearch()
+        ? '⏳ Думаю / ищу…'
+        : '⏳ Думаю…';
+    const status = await startStatus(ctx, statusText, reply);
     try {
       const interlocutorCharacteristic = await resolveInterlocutorCharacteristic(
         chat.id,

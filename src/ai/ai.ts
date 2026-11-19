@@ -201,6 +201,8 @@ function attachImageTool(memeMode: boolean) {
   };
 }
 
+export type MentionPromptOptions = { webSearch?: boolean };
+
 export function buildMentionSystemPrompt(
   sarcasmLevel: number,
   imagesEnabled: boolean,
@@ -209,6 +211,7 @@ export function buildMentionSystemPrompt(
   memeMode = false,
   responseTone: ResponseTone = 'gentleman',
   interlocutorCharacteristic?: string | null,
+  options: MentionPromptOptions = {},
 ) {
   const visionRule = hasInputImages
     ? 'Во входе могут быть изображения из сообщения пользователя и/или из цитаты: учитывай их как визуальный контекст.'
@@ -221,6 +224,15 @@ export function buildMentionSystemPrompt(
     ? 'Если ниже есть блок «Характеристика собеседника» — это внутренний контекст о том, кто пишет. Учитывай мягко в тоне и примерах; не цитируй дословно и не раскрывай, что у тебя есть профиль.'
     : '';
   const tone = toneInstructions(responseTone ?? 'gentleman');
+  const webSearch = options.webSearch === true;
+  const webSearchRules = webSearch
+    ? [
+      'Если для ответа нужны свежие или проверяемые факты (новости, цены, даты, актуальные события) — используй веб-поиск (web search).',
+      'Не выдумывай факты, цифры, цитаты, названия и ссылки. Не добавляй фейковые URL.',
+      'Если цитируешь источник, укажи не больше одной реальной ссылки обычным текстом (полный URL без Markdown и HTML).',
+      'Для обычного общения, шуток, мемов и мнений поиск не нужен — отвечай без него.',
+    ].join('\n')
+    : '';
 
   if (memeMode) {
     const imageRule = imagesEnabled && maxImages > 0
@@ -252,7 +264,7 @@ ${visionRule}
 ${quoteRule}
 ${precedingRule}
 ${characteristicRule}`;
-  return [base, sarcasmInstructions(sarcasmLevel), tone, imageRule, characteristicBlock]
+  return [base, sarcasmInstructions(sarcasmLevel), tone, webSearchRules, imageRule, characteristicBlock]
     .filter(Boolean)
     .join('\n');
 }
@@ -265,7 +277,109 @@ export type MentionReply = {
   usage: AiUsage;
 };
 
-export async function replyToMention(
+export function mentionUsesWebSearch() {
+  return config.MENTION_WEB_SEARCH === 'true';
+}
+
+export function buildMentionResponsesInput(prompt: string, inputImages: MentionInputImage[] = []) {
+  if (inputImages.length === 0) return prompt;
+  return [
+    {
+      role: 'user' as const,
+      content: [
+        { type: 'input_text' as const, text: prompt },
+        ...inputImages.map((image) => ({
+          type: 'input_image' as const,
+          detail: 'auto' as const,
+          image_url: `data:${image.mime};base64,${image.data.toString('base64')}`,
+        })),
+      ],
+    },
+  ];
+}
+
+export function buildMentionResponsesCreateParams(
+  prompt: string,
+  options: {
+    sarcasmLevel?: number;
+    responseTone?: ResponseTone;
+    maxOutputTokens?: number;
+    inputImages?: MentionInputImage[];
+    interlocutorCharacteristic?: string | null;
+  } = {},
+) {
+  const sarcasmLevel = options.sarcasmLevel ?? 0;
+  const responseTone = options.responseTone ?? 'gentleman';
+  const maxOutputTokens = options.maxOutputTokens ?? config.MENTION_MAX_OUTPUT_TOKENS;
+  const inputImages = options.inputImages ?? [];
+  const model = config.OPENAI_MODEL;
+  return {
+    model,
+    instructions: buildMentionSystemPrompt(
+      sarcasmLevel,
+      false,
+      0,
+      inputImages.length > 0,
+      false,
+      responseTone,
+      options.interlocutorCharacteristic,
+      { webSearch: true },
+    ),
+    input: buildMentionResponsesInput(prompt, inputImages),
+    tools: [buildWebSearchTool()],
+    // tool_choice left auto — casual chat must not force web_search.
+    max_output_tokens: maxOutputTokens,
+    ...newsResponsesReasoningOptions(model),
+  };
+}
+
+export type MentionResponsesValidationInput = {
+  status?: string | null;
+  error?: { code?: string | null; message?: string | null } | null;
+  incomplete_details?: { reason?: string | null } | null;
+  output?: ReadonlyArray<{ type?: string; status?: string | null }> | null;
+  output_text?: string | null;
+};
+
+/** Like news validation, but never requires a successful web_search_call. */
+export function assertMentionResponsesResult(response: MentionResponsesValidationInput): string {
+  if (response.error) {
+    const detail = [response.error.code, response.error.message].filter(Boolean).join(': ');
+    throw new Error(`Mention Responses API error${detail ? ` (${detail})` : ''}`);
+  }
+
+  if (response.status !== 'completed') {
+    const reason = response.incomplete_details?.reason;
+    const suffix = reason ? ` (${reason})` : '';
+    throw new Error(`Mention Responses status is ${response.status ?? 'unknown'}${suffix}`);
+  }
+
+  const content = response.output_text?.trim();
+  if (!content) throw new Error('Empty mention model response');
+  return content;
+}
+
+async function replyToMentionWithWebSearch(
+  prompt: string,
+  options: {
+    sarcasmLevel?: number;
+    responseTone?: ResponseTone;
+    maxOutputTokens?: number;
+    inputImages?: MentionInputImage[];
+    interlocutorCharacteristic?: string | null;
+  } = {},
+): Promise<MentionReply> {
+  const params = buildMentionResponsesCreateParams(prompt, options);
+  const response = await client.responses.create(params);
+  const text = assertMentionResponsesResult(response);
+  return {
+    text,
+    images: [],
+    usage: mapResponsesUsage(params.model, response.usage),
+  };
+}
+
+async function replyToMentionViaChatCompletions(
   prompt: string,
   options: {
     sarcasmLevel?: number;
@@ -367,6 +481,26 @@ export async function replyToMention(
       imageCount: images.length,
     }),
   };
+}
+
+export async function replyToMention(
+  prompt: string,
+  options: {
+    sarcasmLevel?: number;
+    responseTone?: ResponseTone;
+    imagesEnabled?: boolean;
+    maxImages?: number;
+    maxOutputTokens?: number;
+    inputImages?: MentionInputImage[];
+    memeMode?: boolean;
+    interlocutorCharacteristic?: string | null;
+  } = {},
+): Promise<MentionReply> {
+  const memeMode = options.memeMode === true;
+  if (mentionUsesWebSearch() && !memeMode) {
+    return replyToMentionWithWebSearch(prompt, options);
+  }
+  return replyToMentionViaChatCompletions(prompt, options);
 }
 
 export type GifReaction = {
@@ -488,16 +622,21 @@ export function buildNewsUserPrompt(
   );
 }
 
-export function buildNewsWebSearchTool() {
+export function buildWebSearchTool(contextSize = config.NEWS_SEARCH_CONTEXT_SIZE) {
   return {
     type: 'web_search' as const,
-    search_context_size: config.NEWS_SEARCH_CONTEXT_SIZE,
+    search_context_size: contextSize,
     user_location: {
       type: 'approximate' as const,
       country: 'RU',
       timezone: 'Europe/Moscow',
     },
   };
+}
+
+/** Alias kept for existing news tests / call sites. */
+export function buildNewsWebSearchTool() {
+  return buildWebSearchTool();
 }
 
 /** Only gpt-6* Responses models get an explicit reasoning effort (avoids 400 on non-reasoning models). */
@@ -519,7 +658,7 @@ export function buildNewsResponsesCreateParams(
     model,
     instructions: buildNewsSystemPrompt(sphereLabelText, { webSearch: true }),
     input: buildNewsUserPrompt(sphereId, sphereLabelText, moscowDay, { webSearch: true }),
-    tools: [buildNewsWebSearchTool()],
+    tools: [buildWebSearchTool()],
     ...(force ? { tool_choice: 'required' as const } : {}),
     max_output_tokens: config.NEWS_MAX_OUTPUT_TOKENS,
     // Keep reasoning low so tool/reasoning tokens do not exhaust the news output budget.
