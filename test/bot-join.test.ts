@@ -10,8 +10,20 @@ test('kicked→administrator is a join transition', () => {
   assert.equal(isBotJoinTransition('kicked', 'administrator'), true);
 });
 
+test('left→administrator is a join transition', () => {
+  assert.equal(isBotJoinTransition('left', 'administrator'), true);
+});
+
+test('kicked→member is a join transition', () => {
+  assert.equal(isBotJoinTransition('kicked', 'member'), true);
+});
+
 test('left→restricted is not a join transition', () => {
   assert.equal(isBotJoinTransition('left', 'restricted'), false);
+});
+
+test('restricted→member is not a join transition', () => {
+  assert.equal(isBotJoinTransition('restricted', 'member'), false);
 });
 
 test('member→administrator is not a join transition', () => {
