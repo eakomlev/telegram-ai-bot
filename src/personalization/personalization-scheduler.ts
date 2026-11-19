@@ -102,8 +102,8 @@ async function runTick(api: Api, now: Date) {
 }
 
 export type ManualPersonalizationOptions = {
-  /** If omitted → all enabled chats (plus ALLOWED_CHAT_IDS filter). */
-  chatIds?: number[];
+  /** Required: only these chat ids are considered (still filtered by enabled + allowlist). */
+  chatIds: number[];
   now?: Date;
 };
 
@@ -116,12 +116,45 @@ export type ManualPersonalizationChatResult = {
 };
 
 /**
+ * Filter enabled personalization chats by ALLOWED_CHAT_IDS when the allowlist is non-empty.
+ * Pure helper for tests and picker eligibility.
+ */
+export function filterEligibleManualPersonalizationChats(
+  enabledChatIds: number[],
+  allowed: ReadonlySet<string> = allowedChatIds,
+): number[] {
+  if (!allowed.size) return [...enabledChatIds];
+  return enabledChatIds.filter((chatId) => allowed.has(String(chatId)));
+}
+
+/**
+ * Resolve which chats a manual run will touch.
+ * Never expands empty `requestedChatIds` to “all enabled” — empty in → empty out.
+ */
+export function selectManualPersonalizationChatIds(
+  requestedChatIds: number[],
+  enabledChatIds: Iterable<number>,
+  allowed: ReadonlySet<string> = allowedChatIds,
+): number[] {
+  const enabled = new Set(enabledChatIds);
+  const filtered = requestedChatIds.filter((id) => enabled.has(id));
+  return filterEligibleManualPersonalizationChats(filtered, allowed);
+}
+
+/** Enabled personalization chats that pass ALLOWED_CHAT_IDS (if set). */
+export async function listEligibleManualPersonalizationChats(): Promise<number[]> {
+  const enabled = await listEnabledPersonalizationChats();
+  return filterEligibleManualPersonalizationChats(enabled);
+}
+
+/**
  * Owner-triggered personalization: ignores Moscow hour and same-day claim.
  * Shares `runningTick` with the nightly scheduler so OpenAI runs never overlap.
+ * Never expands to “all chats” — callers must pass explicit `chatIds`.
  */
 export async function runManualPersonalization(
   api: Api,
-  options: ManualPersonalizationOptions = {},
+  options: ManualPersonalizationOptions,
 ): Promise<ManualPersonalizationChatResult[]> {
   if (runningTick) throw new PersonalizationBusyError();
 
@@ -144,11 +177,11 @@ async function runManual(
 
   const now = options.now ?? new Date();
   const moscowDate = moscowDateString(now);
-  const enabled = new Set(await listEnabledPersonalizationChats());
-  let chatIds = options.chatIds ? options.chatIds.filter((id) => enabled.has(id)) : [...enabled];
-  if (allowedChatIds.size) {
-    chatIds = chatIds.filter((chatId) => allowedChatIds.has(String(chatId)));
-  }
+  const chatIds = selectManualPersonalizationChatIds(
+    options.chatIds,
+    await listEnabledPersonalizationChats(),
+  );
+  if (!chatIds.length) return [];
 
   const results: ManualPersonalizationChatResult[] = [];
   for (const chatId of chatIds) {
@@ -212,7 +245,15 @@ export function formatManualPersonalizationSummary(
   return lines.join('\n');
 }
 
-/** Parse optional `/personalize` argument: undefined = all, number = one chat, null = invalid. */
+/** Usage hint for invalid `/personalize` arguments. */
+export const PERSONALIZE_USAGE = 'Использование: /personalize или /personalize <chat_id>';
+
+/**
+ * Parse optional `/personalize` argument:
+ * - undefined → show group picker (do not run)
+ * - number → owner shortcut for one chat
+ * - null → invalid
+ */
 export function parsePersonalizeChatIdArg(raw: string): number | undefined | null {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;

@@ -11,15 +11,25 @@ import {
 import { chronologicalFromNewestFirst } from '../src/core/db.js';
 import { pickInjectedCharacteristic } from '../src/mention/mention.js';
 import {
+  filterEligibleManualPersonalizationChats,
   formatManualPersonalizationSummary,
   formatPersonalizeChatIneligibleMessage,
   isPersonalizationDayDue,
   isPersonalizationHourDue,
   isPersonalizationRunInProgress,
   parsePersonalizeChatIdArg,
+  PERSONALIZE_USAGE,
   PersonalizationBusyError,
+  selectManualPersonalizationChatIds,
   shouldRetryPersonalizationClaim,
 } from '../src/personalization/personalization-scheduler.js';
+import { shouldPassPrivateMiddleware } from '../src/core/private-gate.js';
+import {
+  buildPersonalizePickerKeyboard,
+  parsePersonalizeCallbackData,
+  PERSONALIZE_CALLBACK_PREFIX,
+  truncatePersonalizeButtonLabel,
+} from '../src/personalization/personalize-ui.js';
 import {
   batchParticipants,
   buildPersonalizationTranscript,
@@ -159,13 +169,108 @@ test('soft-failure claim helpers clear empty productive runs only', () => {
   assert.equal(shouldRetryPersonalizationClaim(undefined, new Error('drafts empty')), true);
 });
 
-test('parsePersonalizeChatIdArg accepts empty, digits, rejects junk', () => {
+test('parsePersonalizeChatIdArg: empty → picker signal, digits → chat, junk → invalid', () => {
+  // undefined means show group picker (do not run for all chats)
   assert.equal(parsePersonalizeChatIdArg(''), undefined);
   assert.equal(parsePersonalizeChatIdArg('  '), undefined);
   assert.equal(parsePersonalizeChatIdArg('-100123'), -100123);
   assert.equal(parsePersonalizeChatIdArg('42'), 42);
   assert.equal(parsePersonalizeChatIdArg('abc'), null);
   assert.equal(parsePersonalizeChatIdArg('1.5'), null);
+  assert.match(PERSONALIZE_USAGE, /\/personalize/);
+});
+
+test('parsePersonalizeCallbackData accepts run/cancel, rejects malformed', () => {
+  assert.deepEqual(parsePersonalizeCallbackData('pers:cancel'), { type: 'cancel' });
+  assert.deepEqual(parsePersonalizeCallbackData('pers:run:-100123'), {
+    type: 'run',
+    chatId: -100123,
+  });
+  assert.deepEqual(parsePersonalizeCallbackData('pers:run:42'), { type: 'run', chatId: 42 });
+  assert.equal(parsePersonalizeCallbackData('pers:run:abc'), null);
+  assert.equal(parsePersonalizeCallbackData('pers:other'), null);
+  assert.equal(parsePersonalizeCallbackData('set:close'), null);
+  assert.equal(PERSONALIZE_CALLBACK_PREFIX, 'pers:');
+});
+
+test('buildPersonalizePickerKeyboard: one row per group + Cancel', () => {
+  const keyboard = buildPersonalizePickerKeyboard([
+    { chatId: -1, label: 'Alpha (-1)' },
+    { chatId: -2, label: 'Beta (-2)' },
+  ]);
+  const rows = keyboard.inline_keyboard;
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0]?.[0]?.text, 'Alpha (-1)');
+  assert.equal(rows[0]?.[0] && 'callback_data' in rows[0][0] ? rows[0][0].callback_data : null, 'pers:run:-1');
+  assert.equal(rows[1]?.[0]?.text, 'Beta (-2)');
+  assert.equal(rows[2]?.[0]?.text, 'Отмена');
+  assert.equal(rows[2]?.[0] && 'callback_data' in rows[2][0] ? rows[2][0].callback_data : null, 'pers:cancel');
+  assert.equal(truncatePersonalizeButtonLabel('x'.repeat(70)).length, 64);
+});
+
+test('filterEligibleManualPersonalizationChats applies allowlist when non-empty', () => {
+  const enabled = [-100, -200, -300];
+  assert.deepEqual(filterEligibleManualPersonalizationChats(enabled, new Set()), [-100, -200, -300]);
+  assert.deepEqual(
+    filterEligibleManualPersonalizationChats(enabled, new Set(['-100', '-300'])),
+    [-100, -300],
+  );
+  // Manual run requires explicit chatIds: empty input → empty (no “all chats” fallback)
+  assert.deepEqual(filterEligibleManualPersonalizationChats([], new Set()), []);
+});
+
+test('selectManualPersonalizationChatIds: empty requested does not expand to all enabled', () => {
+  const enabled = [-100, -200, -300];
+  assert.deepEqual(selectManualPersonalizationChatIds([], enabled, new Set()), []);
+  assert.deepEqual(selectManualPersonalizationChatIds([-200], enabled, new Set()), [-200]);
+  assert.deepEqual(
+    selectManualPersonalizationChatIds([-100, -999], enabled, new Set(['-100', '-200'])),
+    [-100],
+  );
+});
+
+test('shouldPassPrivateMiddleware allows callbacks and owner personalize commands', () => {
+  // Regression: private middleware used to require message text, blocking pers: callbacks
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: true, messageText: '', isOwner: false }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/personalize',
+      isOwner: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/personalize@MyBot -100',
+      isOwner: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: '/stats', isOwner: true }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/personalize',
+      isOwner: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: '/help', isOwner: true }),
+    false,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: 'hello', isOwner: true }),
+    false,
+  );
 });
 
 test('isPersonalizationRunInProgress is idle by default', () => {
