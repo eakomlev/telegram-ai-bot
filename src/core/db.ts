@@ -867,11 +867,45 @@ export async function listKnownChatIds(): Promise<number[]> {
      UNION
      SELECT chat_id::text FROM chat_settings
      UNION
-     SELECT chat_id::text FROM openai_usage`,
+     SELECT chat_id::text FROM openai_usage
+     UNION
+     SELECT chat_id::text FROM chat_participants
+     UNION
+     SELECT chat_id::text FROM chat_member_snapshots
+     UNION
+     SELECT chat_id::text FROM pending_auto_answers
+     UNION
+     SELECT chat_id::text FROM summary_requests`,
   );
   return result.rows
     .map((row) => Number(row.chat_id))
     .filter((id) => Number.isSafeInteger(id));
+}
+
+/**
+ * Delete all per-chat rows for a gone / inaccessible Telegram chat.
+ * Does not touch `video_cache` (keyed by URL, not chat_id).
+ * Personalization draft files are wiped by the caller (avoids db ↔ personalization import cycle).
+ */
+export async function purgeChatData(chatId: number): Promise<void> {
+  const client = await pool.connect();
+  const id = String(chatId);
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM pending_auto_answers WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM messages WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM summary_requests WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM chat_participants WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM chat_member_snapshots WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM openai_usage WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM chat_settings WHERE chat_id = $1', [id]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function hasChatMemberSnapshot(chatId: number, capturedOn: string): Promise<boolean> {

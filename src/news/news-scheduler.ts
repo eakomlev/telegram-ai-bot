@@ -1,6 +1,6 @@
 import type { Api } from 'grammy';
-import { GrammyError } from 'grammy';
 import { resolveChatSettings, type ChatSettings } from '../chat/chat-settings.js';
+import { isPermanentTelegramDeliveryError } from '../chat/telegram-errors.js';
 import { allowedChatIds, config } from '../config.js';
 import {
   claimNewsSend,
@@ -13,6 +13,8 @@ import {
 } from '../core/db.js';
 import { moscowDateString, moscowParts, pickRandomNewsRunAt, zonedMoscowTime } from '../core/moscow-time.js';
 import { postNewsToChat } from './news.js';
+
+export { isPermanentTelegramDeliveryError };
 
 let newsTimer: NodeJS.Timeout | undefined;
 let runningTick: Promise<void> | undefined;
@@ -48,19 +50,6 @@ export function softRetryAt(now = new Date(), retryMinutes = config.NEWS_RETRY_M
   const retry = new Date(now.getTime() + retryMinutes * 60_000);
   if (retry.getTime() < endOfWindow.getTime()) return retry;
   return nextDayNewsRunAt(now);
-}
-
-/** Permanent delivery failures: stop scheduling instead of burning OpenAI retries. */
-export function isPermanentTelegramDeliveryError(error: unknown): boolean {
-  if (!(error instanceof GrammyError)) return false;
-  if (error.error_code === 403) return true;
-  const description = error.description.toLowerCase();
-  return (
-    description.includes('chat not found')
-    || description.includes('bot was kicked')
-    || description.includes('bot is not a member')
-    || description.includes('group chat was upgraded')
-  );
 }
 
 async function rescheduleNewsRunWithRetry(chatId: number, nextRunAt: Date) {
