@@ -873,7 +873,9 @@ export async function listKnownChatIds(): Promise<number[]> {
      UNION
      SELECT chat_id::text FROM chat_member_snapshots
      UNION
-     SELECT chat_id::text FROM pending_auto_answers`,
+     SELECT chat_id::text FROM pending_auto_answers
+     UNION
+     SELECT chat_id::text FROM summary_requests`,
   );
   return result.rows
     .map((row) => Number(row.chat_id))

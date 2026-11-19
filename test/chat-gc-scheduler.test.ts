@@ -11,10 +11,14 @@ import { config } from '../src/config.js';
 import { pool, purgeChatData } from '../src/core/db.js';
 import { zonedMoscowTime } from '../src/core/moscow-time.js';
 
-function grammyError(errorCode: number, description: string) {
+function grammyError(
+  errorCode: number,
+  description: string,
+  parameters: { migrate_to_chat_id?: number } = {},
+) {
   return new GrammyError(
     'Request failed',
-    { ok: false, error_code: errorCode, description },
+    { ok: false, error_code: errorCode, description, parameters },
     'getChat',
     {},
   );
@@ -119,6 +123,110 @@ test('chat GC purges on permanent errors, continues on transient, once per slot'
       // Next configured hour is a new slot.
       await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 16, 0));
       assert.deepEqual(probed, [-1, -2, -3]);
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
+    }
+  });
+});
+
+test('chat GC does not purge on group→supergroup upgrade errors', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const purgedIds: string[] = [];
+    const probed: number[] = [];
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+        return { rows: [{ chat_id: '-50' }, { chat_id: '-51' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string, values: unknown[] = []) => {
+        if (sql.startsWith('DELETE FROM') && values[0] != null) {
+          purgedIds.push(String(values[0]));
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => {
+        probed.push(chatId);
+        if (chatId === -50) {
+          throw grammyError(
+            400,
+            'Bad Request: group chat was upgraded to a supergroup chat',
+            { migrate_to_chat_id: -100999 },
+          );
+        }
+        return { id: chatId };
+      },
+    } as unknown as Api;
+
+    try {
+      await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 4, 0));
+      assert.deepEqual(probed, [-50, -51]);
+      assert.deepEqual(purgedIds, []);
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
+    }
+  });
+});
+
+test('chat GC leaves slot open when purge fails so the next tick retries', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const probed: number[] = [];
+    let purgeAttempts = 0;
+    let failPurge = true;
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+        return { rows: [{ chat_id: '-70' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string) => {
+        if (sql === 'BEGIN') {
+          purgeAttempts += 1;
+          if (failPurge) throw new Error('simulated purge failure');
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => {
+        probed.push(chatId);
+        throw grammyError(403, 'Forbidden: bot was kicked from the group chat');
+      },
+    } as unknown as Api;
+
+    const now = zonedMoscowTime(2024, 6, 1, 4, 0);
+    try {
+      await runChatGcSchedulerTick(api, now);
+      assert.deepEqual(probed, [-70]);
+      assert.equal(purgeAttempts, 1);
+
+      failPurge = false;
+      probed.length = 0;
+      await runChatGcSchedulerTick(api, now);
+      assert.deepEqual(probed, [-70]);
+      assert.equal(purgeAttempts, 2);
+
+      probed.length = 0;
+      await runChatGcSchedulerTick(api, now);
+      assert.deepEqual(probed, []);
     } finally {
       pool.query = originalQuery;
       pool.connect = originalConnect;

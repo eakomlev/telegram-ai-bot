@@ -4,7 +4,7 @@ import { allowedChatIds, chatGcHoursMoscow, config } from '../config.js';
 import { listKnownChatIds, purgeChatData } from '../core/db.js';
 import { moscowDateString, moscowParts } from '../core/moscow-time.js';
 import { wipeChatDraftDir } from '../personalization/personalization.js';
-import { isPermanentTelegramDeliveryError } from './telegram-errors.js';
+import { isChatUpgradeError, isPermanentTelegramDeliveryError } from './telegram-errors.js';
 
 let chatGcTimer: NodeJS.Timeout | undefined;
 let runningTick: Promise<void> | undefined;
@@ -48,6 +48,7 @@ async function runTick(api: Api, now: Date) {
   }
 
   let abortedByRateLimit = false;
+  let purgeFailed = false;
   for (const chatId of chatIds) {
     try {
       await api.getChat(chatId);
@@ -60,7 +61,16 @@ async function runTick(api: Api, now: Date) {
         abortedByRateLimit = true;
         break;
       }
-      if (isPermanentTelegramDeliveryError(error)) {
+      if (isChatUpgradeError(error)) {
+        // Old id is gone; community continues under migrate_to_chat_id — do not purge.
+        console.error('Chat GC skipping upgraded group (leave data for retention/migrate)', {
+          chatId,
+          migrateToChatId: error instanceof GrammyError
+            ? error.parameters?.migrate_to_chat_id
+            : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } else if (isPermanentTelegramDeliveryError(error)) {
         console.error('Chat GC purging inaccessible chat', {
           chatId,
           message: error instanceof Error ? error.message : String(error),
@@ -69,6 +79,7 @@ async function runTick(api: Api, now: Date) {
           await purgeChatData(chatId);
           await wipeChatDraftDir(chatId);
         } catch (purgeError) {
+          purgeFailed = true;
           console.error('Chat GC purge failed', {
             chatId,
             message: purgeError instanceof Error ? purgeError.message : String(purgeError),
@@ -86,8 +97,8 @@ async function runTick(api: Api, now: Date) {
     }
   }
 
-  // Mark slot complete only after a full pass (or empty list); 429 leaves it open for retry.
-  if (!abortedByRateLimit) {
+  // Mark slot complete only after a full pass; 429 / purge failure leave it open for retry.
+  if (!abortedByRateLimit && !purgeFailed) {
     lastCompletedSlot = slot;
   }
 }
