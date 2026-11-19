@@ -1,6 +1,10 @@
 import { InputFile, type Api, type Context } from 'grammy';
 import type { Message, MessageEntity } from 'grammy/types';
-import { mentionUsesWebSearch, replyToMention, type MentionInputImage } from '../ai/ai.js';
+import {
+  mentionShouldUseWebSearchPath,
+  replyToMention,
+  type MentionInputImage,
+} from '../ai/ai.js';
 import {
   formatContextLine,
   trimPrecedingContext,
@@ -162,6 +166,22 @@ export function isMemeRequest(text: string): boolean {
   if (/two\s+buttons/.test(value)) return true;
   if (/expanding\s+brain/.test(value)) return true;
   if (/distracted\s+boyfriend/.test(value)) return true;
+  return false;
+}
+
+/** Clear non-meme image-generation intent → keep Chat Completions + attach_image. */
+export function isImageGenerationRequest(text: string): boolean {
+  const value = text.trim().toLowerCase();
+  if (!value) return false;
+  // Cyrillic: \b is ASCII-only in JS — use Unicode letter/number boundaries.
+  const ruBound = (word: string) =>
+    new RegExp(`(?:^|[^\\p{L}\\p{N}])${word}(?=[^\\p{L}\\p{N}]|$)`, 'u');
+  if (ruBound('нарисуй(?:те)?').test(value) || ruBound('нарисовать').test(value)) return true;
+  // "сгенерируй/сделай/создай картинку|изображение" (stem match avoids ending noise).
+  if (/(?:сгенерируй(?:те)?|сделай(?:те)?|создай(?:те)?)\s+(?:картинк|изображен)/u.test(value)) return true;
+  if (/\bgenerate\s+(?:an?\s+)?images?\b/.test(value)) return true;
+  if (/\bcreate\s+(?:an?\s+)?images?\b/.test(value)) return true;
+  if (/\bdraw\s+(?:me|us|a|an)\b/.test(value)) return true;
   return false;
 }
 
@@ -377,11 +397,15 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
       ...(message.message_thread_id ? { message_thread_id: message.message_thread_id } : {}),
     };
     const memeMode = isMemeRequest(userText);
+    const forceCompletions = !memeMode && isImageGenerationRequest(userText);
+    const useWebSearchPath = mentionShouldUseWebSearchPath({ memeMode, forceCompletions });
     const statusText = memeMode
       ? '⏳ Делаю мем…'
-      : mentionUsesWebSearch()
-        ? '⏳ Думаю / ищу…'
-        : '⏳ Думаю…';
+      : forceCompletions
+        ? '⏳ Рисую…'
+        : useWebSearchPath
+          ? '⏳ Думаю / ищу…'
+          : '⏳ Думаю…';
     const status = await startStatus(ctx, statusText, reply);
     try {
       const interlocutorCharacteristic = await resolveInterlocutorCharacteristic(
@@ -398,6 +422,7 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
         maxOutputTokens: config.MENTION_MAX_OUTPUT_TOKENS,
         inputImages,
         memeMode,
+        forceCompletions,
         interlocutorCharacteristic,
       });
       const chatId = chat.id;

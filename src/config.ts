@@ -17,9 +17,9 @@ const schema = z.object({
   OPENAI_ADMIN_API_KEY: z.string().default(''),
   /** Default Chat Completions model (summary, mention, gif, auto-answer, …). For gpt-6* sets reasoning_effort=none. */
   OPENAI_MODEL: z.string().min(1).default('gpt-6-sol'),
-  /** Optional OpenAI-compatible base URL; empty = official API. News+web_search needs /v1/responses + hosted web_search. */
+  /** Optional OpenAI-compatible base URL; empty = official API. Mentions/news with web_search need /v1/responses + hosted web_search. */
   OPENAI_BASE_URL: z.string().default(''),
-  /** OpenAI SDK request timeout (ms). Raise for news with web_search. */
+  /** OpenAI SDK request timeout (ms). Raise for mentions/news with web_search. */
   OPENAI_TIMEOUT_MS: integer(90000, 1000, 600000),
   /** OpenAI SDK max retries per request. */
   OPENAI_MAX_RETRIES: integer(1, 0, 5),
@@ -164,8 +164,9 @@ const schema = z.object({
   /** Max characters of preceding context included in a mention prompt. */
   MENTION_CONTEXT_MAX_CHARS: integer(500, 0, 50000),
   /**
-   * true = mention replies via Responses API + hosted web_search (tool_choice auto);
-   * false = Chat Completions without web. Memes / image-gen stay on Completions.
+   * true = ordinary mention text via Responses API + hosted web_search (tool_choice auto);
+   * memes and explicit image-gen requests stay on Chat Completions + attach_image.
+   * false = Chat Completions for all mentions (no live web).
    * Search context size reuses NEWS_SEARCH_CONTEXT_SIZE.
    */
   MENTION_WEB_SEARCH: bool.default('true'),

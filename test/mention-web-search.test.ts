@@ -6,11 +6,13 @@ import {
   buildMentionResponsesInput,
   buildMentionSystemPrompt,
   buildWebSearchTool,
+  mentionShouldUseWebSearchPath,
   mentionUsesWebSearch,
   newsResponsesReasoningOptions,
   responseHasWebSearchCall,
 } from '../src/ai/ai.js';
 import { config } from '../src/config.js';
+import { isImageGenerationRequest, isMemeRequest } from '../src/mention/mention.js';
 
 test('mention system prompt includes soft search rules only when webSearch: true', () => {
   const withSearch = buildMentionSystemPrompt(0, false, 0, false, false, 'gentleman', null, {
@@ -122,6 +124,27 @@ test('assertMentionResponsesResult throws on error, incomplete, empty text', () 
 
 test('mentionUsesWebSearch mirrors MENTION_WEB_SEARCH config', () => {
   assert.equal(mentionUsesWebSearch(), config.MENTION_WEB_SEARCH === 'true');
+});
+
+test('mentionShouldUseWebSearchPath respects memeMode, forceCompletions, and config gate', () => {
+  assert.equal(mentionShouldUseWebSearchPath({}), mentionUsesWebSearch());
+  assert.equal(mentionShouldUseWebSearchPath({ memeMode: true }), false);
+  assert.equal(mentionShouldUseWebSearchPath({ forceCompletions: true }), false);
+  assert.equal(mentionShouldUseWebSearchPath({ memeMode: true, forceCompletions: true }), false);
+  // Pure logic: when the config gate is off, path is always false regardless of flags.
+  if (!mentionUsesWebSearch()) {
+    assert.equal(mentionShouldUseWebSearchPath({ memeMode: false, forceCompletions: false }), false);
+  } else {
+    assert.equal(mentionShouldUseWebSearchPath({ memeMode: false, forceCompletions: false }), true);
+  }
+});
+
+test('isImageGenerationRequest detects clear draw/generate intent', () => {
+  assert.equal(isImageGenerationRequest('нарисуй кота в космосе'), true);
+  assert.equal(isImageGenerationRequest('какой сегодня курс доллара?'), false);
+  assert.equal(isImageGenerationRequest('расскажи анекдот'), false);
+  assert.equal(isMemeRequest('нарисуй кота в космосе'), false);
+  assert.equal(isMemeRequest('сделай мем про кота'), true);
 });
 
 test('buildWebSearchTool reuses NEWS_SEARCH_CONTEXT_SIZE by default', () => {

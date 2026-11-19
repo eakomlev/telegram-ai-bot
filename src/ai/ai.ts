@@ -281,6 +281,14 @@ export function mentionUsesWebSearch() {
   return config.MENTION_WEB_SEARCH === 'true';
 }
 
+/** Responses+web_search path only when enabled and not forced onto Completions (memes / explicit image-gen). */
+export function mentionShouldUseWebSearchPath(options: {
+  memeMode?: boolean;
+  forceCompletions?: boolean;
+} = {}) {
+  return mentionUsesWebSearch() && !options.memeMode && !options.forceCompletions;
+}
+
 export function buildMentionResponsesInput(prompt: string, inputImages: MentionInputImage[] = []) {
   if (inputImages.length === 0) return prompt;
   return [
@@ -493,11 +501,15 @@ export async function replyToMention(
     maxOutputTokens?: number;
     inputImages?: MentionInputImage[];
     memeMode?: boolean;
+    /** Force Chat Completions (e.g. explicit non-meme image-gen request). */
+    forceCompletions?: boolean;
     interlocutorCharacteristic?: string | null;
   } = {},
 ): Promise<MentionReply> {
-  const memeMode = options.memeMode === true;
-  if (mentionUsesWebSearch() && !memeMode) {
+  if (mentionShouldUseWebSearchPath({
+    memeMode: options.memeMode === true,
+    forceCompletions: options.forceCompletions === true,
+  })) {
     return replyToMentionWithWebSearch(prompt, options);
   }
   return replyToMentionViaChatCompletions(prompt, options);
