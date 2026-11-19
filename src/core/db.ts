@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { config } from '../config.js';
+import { allowedChatIds, config } from '../config.js';
 import type { ChatMessage, Selection } from '../summary/summary.js';
 
 export const pool = new pg.Pool({
@@ -1062,6 +1062,52 @@ export async function listChatParticipants(
     [String(chatId), limit],
   );
   return result.rows.map(mapChatParticipant);
+}
+
+/**
+ * Distinct chat_ids that have at least one participant with a non-empty characteristic.
+ * ALLOWED_CHAT_IDS filtering is applied in JS (empty allowlist = all chats).
+ */
+export async function listChatsWithCharacteristics(
+  allowed: ReadonlySet<string> = allowedChatIds,
+): Promise<number[]> {
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT DISTINCT chat_id::text AS chat_id
+     FROM chat_participants
+     WHERE characteristic IS NOT NULL AND btrim(characteristic) <> ''
+     ORDER BY chat_id`,
+  );
+  const chatIds = result.rows.map((row) => Number(row.chat_id));
+  return filterChatIdsByAllowlist(chatIds, allowed);
+}
+
+/**
+ * All participants in a chat with a non-empty characteristic, newest activity first.
+ * Same columns as {@link listChatParticipants}, but no LIMIT — browse UI must not hide
+ * profiles the way job-side PERSONALIZATION_MAX_USERS_PER_CHAT top-N does.
+ */
+export async function listChatParticipantsWithCharacteristics(
+  chatId: number,
+): Promise<ChatParticipantRow[]> {
+  const result = await pool.query<ChatParticipantDbRow>(
+    `SELECT chat_id::text AS chat_id, user_id::text AS user_id, username, display_name, characteristic,
+            characteristic_updated_at, characteristic_source_until, first_seen_at, last_seen_at, updated_at
+     FROM chat_participants
+     WHERE chat_id = $1
+       AND characteristic IS NOT NULL AND btrim(characteristic) <> ''
+     ORDER BY last_seen_at DESC`,
+    [String(chatId)],
+  );
+  return result.rows.map(mapChatParticipant);
+}
+
+/** Pure allowlist filter for chat ids; empty set means all ids pass. */
+export function filterChatIdsByAllowlist(
+  chatIds: number[],
+  allowed: ReadonlySet<string>,
+): number[] {
+  if (!allowed.size) return [...chatIds];
+  return chatIds.filter((chatId) => allowed.has(String(chatId)));
 }
 
 export async function updateParticipantCharacteristic(params: {

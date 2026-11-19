@@ -49,6 +49,11 @@ import {
   replyWithPersonalizePicker,
   startManualPersonalizationRun,
 } from './personalization/personalize-ui.js';
+import {
+  handlePersonalizeResultsCallback,
+  OWNER_UNSET_TEXT,
+  replyWithPersonalizeResultsPicker,
+} from './personalization/personalize-results-ui.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -119,7 +124,7 @@ bot.use(async (ctx, next) => {
     if (messageText.startsWith('/')) {
       await ctx.reply(
         ownerUserId && isOwner
-          ? 'В личке доступны только /stats, /costs и /personalize.'
+          ? 'В личке доступны только /stats, /costs, /personalize и /personalize_results.'
           : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
       );
     }
@@ -237,6 +242,21 @@ bot.command('personalize', async (ctx) => {
   }
   await startManualPersonalizationRun(ctx, bot.api, [parsed]);
 });
+
+async function handlePersonalizeResultsCommand(ctx: Context) {
+  if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
+  if (!ownerUserId) {
+    await ctx.reply(OWNER_UNSET_TEXT);
+    return;
+  }
+  await replyWithPersonalizeResultsPicker(ctx, bot.api);
+}
+
+bot.command('personalize_results', (ctx) => handlePersonalizeResultsCommand(ctx));
+// Hyphen alias (not a BotFather command); private-gate also accepts it.
+bot.hears(/^\/personalize-results(?:@\w+)?(?:\s|$)/i, (ctx) =>
+  handlePersonalizeResultsCommand(ctx),
+);
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст и подписи участников, а также текст и подписи исходящих ответов бота на @упоминания и автоответы (сами изображения не сохраняются; не саммари, стихи, GIF, новости и служебные сообщения), ` +
   `отображаемое имя автора, ID пользователя (для обычных аккаунтов), время, ID сообщений и (для тем форума) ID темы в Postgres на ${config.RETENTION_DAYS} дней. ` +
@@ -251,6 +271,8 @@ bot.command('privacy', (ctx) => ctx.reply(
 ));
 
 bot.on('callback_query:data', async (ctx) => {
+  // Prefixes are disjoint: pres: (results) vs pers: (run) vs set: (settings).
+  if (await handlePersonalizeResultsCallback(ctx, bot.api)) return;
   if (await handlePersonalizeCallback(ctx, bot.api)) return;
   if (await handleSettingsCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
@@ -438,6 +460,10 @@ try {
       { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
       { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
       { command: 'personalize', description: 'Выбор группы и запуск персонализации' },
+      {
+        command: 'personalize_results',
+        description: 'Просмотр характеристик участников',
+      },
     ],
     { scope: { type: 'all_private_chats' } },
   );
