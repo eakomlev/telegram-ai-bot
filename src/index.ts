@@ -37,15 +37,17 @@ import { maybeRepostGallery } from './media/gallery.js';
 import { stopMediaJobs } from './core/media-jobs.js';
 import { startNewsScheduler, stopNewsScheduler } from './news/news-scheduler.js';
 import {
-  formatManualPersonalizationSummary,
   getManualPersonalizationChatBlockReason,
-  isPersonalizationRunInProgress,
   parsePersonalizeChatIdArg,
-  PersonalizationBusyError,
-  runManualPersonalization,
+  PERSONALIZE_USAGE,
   startPersonalizationScheduler,
   stopPersonalizationScheduler,
 } from './personalization/personalization-scheduler.js';
+import {
+  handlePersonalizeCallback,
+  replyWithPersonalizePicker,
+  startManualPersonalizationRun,
+} from './personalization/personalize-ui.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -211,40 +213,19 @@ bot.command('personalize', async (ctx) => {
   const raw = typeof ctx.match === 'string' ? ctx.match : '';
   const parsed = parsePersonalizeChatIdArg(raw);
   if (parsed === null) {
-    await ctx.reply('Использование: /personalize или /personalize <chat_id>');
+    await ctx.reply(PERSONALIZE_USAGE);
     return;
   }
-  if (parsed !== undefined) {
-    const blockReason = await getManualPersonalizationChatBlockReason(parsed);
-    if (blockReason) {
-      await ctx.reply(blockReason);
-      return;
-    }
-  }
-  if (isPersonalizationRunInProgress()) {
-    await ctx.reply('Персонализация уже выполняется. Попробуйте позже.');
+  if (parsed === undefined) {
+    await replyWithPersonalizePicker(ctx, bot.api);
     return;
   }
-  const status = await startStatus(ctx, '⏳ Запускаю персонализацию…');
-  void runManualPersonalization(bot.api, parsed === undefined ? {} : { chatIds: [parsed] })
-    .then(async (results) => {
-      await status.clear();
-      const summary = formatManualPersonalizationSummary(results);
-      for (const part of splitReply(summary, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
-        await ctx.reply(part, { link_preview_options: { is_disabled: true } });
-      }
-    })
-    .catch(async (error) => {
-      if (error instanceof PersonalizationBusyError) {
-        await status.clear();
-        await ctx.reply('Персонализация уже выполняется. Попробуйте позже.');
-        return;
-      }
-      console.error('Manual personalization failed', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      await status.fail('Не удалось запустить персонализацию. Попробуйте позже.');
-    });
+  const blockReason = await getManualPersonalizationChatBlockReason(parsed);
+  if (blockReason) {
+    await ctx.reply(blockReason);
+    return;
+  }
+  await startManualPersonalizationRun(ctx, bot.api, [parsed]);
 });
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст и подписи участников, а также текст и подписи исходящих ответов бота на @упоминания и автоответы (сами изображения не сохраняются; не саммари, стихи, GIF, новости и служебные сообщения), ` +
@@ -260,6 +241,7 @@ bot.command('privacy', (ctx) => ctx.reply(
 ));
 
 bot.on('callback_query:data', async (ctx) => {
+  if (await handlePersonalizeCallback(ctx, bot.api)) return;
   if (await handleSettingsCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
@@ -445,7 +427,7 @@ try {
     [
       { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
       { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
-      { command: 'personalize', description: 'Запуск персонализации участников' },
+      { command: 'personalize', description: 'Выбор группы и запуск персонализации' },
     ],
     { scope: { type: 'all_private_chats' } },
   );
