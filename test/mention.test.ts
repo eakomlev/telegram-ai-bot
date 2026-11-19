@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildMentionPrompt,
   collectMessageImageFileIds,
+  isImageGenerationRequest,
   isMemeRequest,
   messageAddressesBot,
   messageMentionsBot,
@@ -245,6 +246,22 @@ test('detects meme keywords and ignores plain image requests', () => {
   assert.equal(isMemeRequest('две кнопки: спать или ещё серию'), true);
   assert.equal(isMemeRequest('нарисуй кота в космосе'), false);
   assert.equal(isMemeRequest('что такое мемплекс'), false);
+});
+
+test('detects explicit image-generation intent without treating memes as image-gen-only', () => {
+  assert.equal(isImageGenerationRequest('нарисуй кота в космосе'), true);
+  assert.equal(isImageGenerationRequest('Нарисуйте собаку в шляпе'), true);
+  assert.equal(isImageGenerationRequest('сгенерируй картинку заката'), true);
+  assert.equal(isImageGenerationRequest('сделай изображение города'), true);
+  assert.equal(isImageGenerationRequest('generate an image of a cat'), true);
+  assert.equal(isImageGenerationRequest('draw me a dragon'), true);
+  assert.equal(isImageGenerationRequest('create an image of Mars'), true);
+  assert.equal(isImageGenerationRequest('какой курс доллара сегодня?'), false);
+  assert.equal(isImageGenerationRequest('привет, как дела?'), false);
+  assert.equal(isImageGenerationRequest('что нарисовали на выставке?'), false);
+  // Meme keywords stay under isMemeRequest; image-gen helper may still match «нарисуй мем».
+  assert.equal(isMemeRequest('сделай мем про понедельник'), true);
+  assert.equal(isImageGenerationRequest('сделай мем про понедельник'), false);
 });
 
 test('meme system prompt forces friendly meme image instructions', () => {

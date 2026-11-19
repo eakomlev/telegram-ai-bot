@@ -86,7 +86,7 @@ src/
 
 ### @упоминания
 
-Глобальный gate `MENTION_ENABLED` + переключатель в `/settings`. Срабатывает на @бота / `text_mention` / reply на сообщение бота. В контекст входят текст/подпись запроса и цитаты, до `MENTION_MAX_INPUT_IMAGES` картинок (vision, `MENTION_VISION_*`, размер `MENTION_MAX_INPUT_IMAGE_MB`), плюс окно предшествующих сообщений (`MENTION_CONTEXT_*`). Ответ может содержать до `MENTION_MAX_IMAGES` сгенерированных картинок (`OPENAI_IMAGE_MODEL`); ключевые слова вроде «мем»/«демотиватор» включают meme-режим. Кулдаун `MENTION_COOLDOWN_SECONDS`. При включённой персонализации в промпт может попасть короткая характеристика собеседника (только чаты с числом участников &lt; `PERSONALIZATION_MAX_CHAT_MEMBERS`).
+Глобальный gate `MENTION_ENABLED` + переключатель в `/settings`. Срабатывает на @бота / `text_mention` / reply на сообщение бота. В контекст входят текст/подпись запроса и цитаты, до `MENTION_MAX_INPUT_IMAGES` картинок (vision, `MENTION_VISION_*`, размер `MENTION_MAX_INPUT_IMAGE_MB`), плюс окно предшествующих сообщений (`MENTION_CONTEXT_*`). Ответ может содержать до `MENTION_MAX_IMAGES` сгенерированных картинок (`OPENAI_IMAGE_MODEL`); ключевые слова вроде «мем»/«демотиватор» включают meme-режим. При `MENTION_WEB_SEARCH=true` обычные текстовые ответы идут через Responses API + hosted `web_search` (`tool_choice` auto — поиск не обязателен; размер контекста поиска — `NEWS_SEARCH_CONTEXT_SIZE`; нужен тот же `/v1/responses` + `web_search`, что и для новостей); входные фото по-прежнему передаются в модель (vision). Мемы и явные запросы на генерацию картинок («нарисуй…», `generate image`, …) остаются на Chat Completions с `attach_image`. `MENTION_WEB_SEARCH=false` — Completions для всех упоминаний без веба. Кулдаун `MENTION_COOLDOWN_SECONDS`. При включённой персонализации в промпт может попасть короткая характеристика собеседника (только чаты с числом участников &lt; `PERSONALIZATION_MAX_CHAT_MEMBERS`).
 
 ### Автоответ на вопросы без ответа
 
@@ -159,8 +159,8 @@ Inline-меню только для админов: саммари только 
 | `OPENAI_NEWS_MODEL` | пусто | Модель новостей; пусто → `OPENAI_MODEL` |
 | `OPENAI_PERSONALIZATION_MODEL` | пусто | Модель персонализации; пусто → `OPENAI_MODEL` |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-1-mini` | Генерация картинок в @упоминаниях |
-| `OPENAI_BASE_URL` | пусто | Совместимый endpoint; для новостей с вебом нужен `/v1/responses` + `web_search` |
-| `OPENAI_TIMEOUT_MS` | `90000` | Таймаут SDK; для web_search часто `120000+` |
+| `OPENAI_BASE_URL` | пусто | Совместимый endpoint; для mentions/news с вебом нужен `/v1/responses` + `web_search` |
+| `OPENAI_TIMEOUT_MS` | `90000` | Таймаут SDK; для mentions/news web_search часто `120000+` |
 | `OPENAI_MAX_RETRIES` | `1` | Повторы SDK |
 | `OPENAI_INPUT_USD_PER_1M_TOKENS` | `2` | Оценка $ input для записи usage (не биллинг) |
 | `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `10` | Оценка $ output для записи usage |
@@ -218,6 +218,7 @@ Inline-меню только для админов: саммари только 
 | `MENTION_CONTEXT_MAX_MESSAGES` | `6` | Предшествующие строки (`0` = без них) |
 | `MENTION_CONTEXT_LOOKBACK_MINUTES` | `10` | Окно по времени |
 | `MENTION_CONTEXT_MAX_CHARS` | `500` | Бюджет символов контекста |
+| `MENTION_WEB_SEARCH` | `true` | Responses + `web_search` (auto; мемы и явный image-gen — Completions) |
 
 ### Автоответ
 
