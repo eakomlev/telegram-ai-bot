@@ -47,3 +47,14 @@ test('buildCommandRegistrationPlan with owner adds chat scope', () => {
     'stats,costs,personalize,personalize_results',
   );
 });
+
+test('me is a group command, not an owner private command', () => {
+  const groupCmds = GROUP_COMMANDS.map((c) => c.command);
+  const ownerCmds = OWNER_PRIVATE_COMMANDS.map((c) => c.command);
+  assert.ok(groupCmds.includes('me'));
+  assert.equal(
+    GROUP_COMMANDS.find((c) => c.command === 'me')?.description,
+    'Моя характеристика в этом чате',
+  );
+  assert.equal(ownerCmds.includes('me'), false);
+});
