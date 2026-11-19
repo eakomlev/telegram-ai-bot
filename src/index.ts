@@ -26,6 +26,7 @@ import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/o
 import { moscowDateString, moscowMonthStart } from './core/moscow-time.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
 import { shouldPassPrivateMiddleware } from './core/private-gate.js';
+import { shouldSendBotJoinWelcome } from './chat/bot-join.js';
 import { startStatus } from './core/status.js';
 
 import { runGifReaction } from './gif/gif.js';
@@ -58,7 +59,7 @@ import {
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
 let stopping = false;
-const help = `Я сохраняю текстовые сообщения и подписи к медиа в этой группе и составляю саммари через OpenAI.
+const help = `Я сохраняю текстовые сообщения и подписи к медиа в этой группе и составляю саммари.
 
 /summary — последние сообщения (число задаётся в /settings)
 /summary 500 — последние 500 сообщений (максимум ${config.MAX_MESSAGE_COUNT})
@@ -69,25 +70,34 @@ const help = `Я сохраняю текстовые сообщения и по�
 /gif — по последним сообщениям подобрать шуточную GIF-реакцию
 /gif 40 — то же по 40 сообщениям (можно 24h / 7d)
 /settings — настройки группы (только администраторы)
-/usage — токены OpenAI по группе за текущий месяц (админы)
+/usage — токены по группе за текущий месяц (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
 
 В /settings можно включить ежедневную интересную новость (случайное время 10:00–21:00 по Москве) по выбранным сферам.
 
-Там же можно включить автоответ на вопросы без ответа: если общий вопрос в чат (без @упоминаний и без ответа-цитаты) останется без реакции участников ~5 минут, бот мягко ответит через OpenAI (с коротким окном недавних сообщений до вопроса как контекстом).
+Там же можно включить автоответ на вопросы без ответа: если общий вопрос в чат (без @упоминаний и без ответа-цитаты) останется без реакции участников ~5 минут, бот мягко ответит (с коротким окном недавних сообщений до вопроса как контекстом).
 
-Персонализация участников по умолчанию включена для небольших чатов (меньше 20 участников): раз в сутки бот анализирует переписку через OpenAI и учитывает короткие внутренние характеристики в ответах на @упоминания и в автоответах. В чатах на 20+ участников персонализация не работает. Отдельного профиля «обо мне» нет.
+Персонализация участников по умолчанию включена для небольших чатов (меньше 20 участников): раз в сутки бот анализирует переписку и учитывает короткие внутренние характеристики в ответах на @упоминания и в автоответах. В чатах на 20+ участников персонализация не работает. Отдельного профиля «обо мне» нет.
 
-Упомяните меня (@бот) в сообщении или ответьте на моё сообщение — отвечу через OpenAI. Текст и картинки из сообщения и из цитаты учитываю как контекст, плюс короткое окно недавних сообщений до запроса/цитаты; в ответе тоже могу прислать картинку.
-Если в запросе есть слова вроде «мем», «демотиватор», «drake» — сделаю мем-картинку.
+Упомяните меня (@бот) в сообщении или ответьте на моё сообщение — отвечу. Текст из сообщения и из цитаты учитываю как контекст, плюс короткое окно недавних сообщений до запроса/цитаты.
 
 Отправьте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — я загружу видео без подписи.
 
-Ссылку на пост с картинками (Instagram, X, Reddit, Pixiv или Imgur) отправлю альбомом.
-Ссылку на товар Wildberries — пришлю фото и название.
-
 История до добавления бота недоступна. По умолчанию саммари могут запрашивать только администраторы.`;
+
+/** Short intro for when the bot is added to a group — aimed at regular members, not admins. */
+const joinWelcome = `Привет! Я в чате.
+
+Могу коротко рассказать, чем полезен участникам:
+• упомяните меня (@бот) или ответьте на моё сообщение — отвечу;
+• киньте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — скачаю видео;
+• /gif — шуточная GIF по недавним сообщениям;
+• /summary и /verse — саммари переписки (иногда только для админов — смотрите настройки чата).
+
+Историю до моего появления в чате я не вижу.
+
+Подробности команд и настроек — в /help.`;
 
 function isBotOwner(ctx: Context) {
   return Boolean(ownerUserId && ctx.from?.id === ownerUserId && !ctx.msg?.sender_chat);
@@ -266,7 +276,7 @@ bot.command('privacy', (ctx) => ctx.reply(
   'Персонализация (по умолчанию вкл. в /settings; только чаты меньше 20 участников): раз в сутки бот анализирует недавнюю переписку и сохраняет внутренние характеристики участников для более уместных ответов на @упоминания и автоответы; отдельного пользовательского профиля нет. ' +
   'Ответы /summary, /verse, /gif и новости в историю переписки для контекста не сохраняются. ' +
   'Для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
-  'Ссылки на видео и посты с картинками передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
+  'Ссылки на видео передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
   'Администратору следует предупредить участников. Доступ и удаление данных — через владельца бота.',
 ));
 
@@ -277,6 +287,31 @@ bot.on('callback_query:data', async (ctx) => {
   if (await handleSettingsCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
+
+bot.on('my_chat_member', async (ctx) => {
+  const u = ctx.myChatMember;
+  if (!u || !ctx.chat) return;
+  if (
+    !shouldSendBotJoinWelcome({
+      chatType: ctx.chat.type,
+      chatId: ctx.chat.id,
+      oldStatus: u.old_chat_member.status,
+      newStatus: u.new_chat_member.status,
+      allowedChatIds,
+    })
+  ) {
+    return;
+  }
+  try {
+    await ctx.reply(joinWelcome);
+  } catch (error) {
+    console.error('Join welcome failed', {
+      chatId: ctx.chat.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 
 async function runSummary(ctx: Context, style: SummaryStyle) {
   const settings = await resolveChatSettings(ctx.chat!.id);
@@ -468,7 +503,7 @@ try {
     { scope: { type: 'all_private_chats' } },
   );
   await bot.start({
-    allowed_updates: ['message', 'edited_message', 'callback_query'],
+    allowed_updates: ['message', 'edited_message', 'callback_query', 'my_chat_member'],
     onStart: () => {
       console.log(`Telegram summary bot started as @${me.username}`);
       void runDailyMemberSnapshots(bot.api).catch(() => console.error('Member snapshot failed'));
