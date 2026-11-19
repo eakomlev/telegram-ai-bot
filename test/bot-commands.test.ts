@@ -30,7 +30,7 @@ test('buildCommandRegistrationPlan without owner: groups + empty private', () =>
   });
 });
 
-test('buildCommandRegistrationPlan with owner adds chat_member scope', () => {
+test('buildCommandRegistrationPlan with owner adds chat scope', () => {
   const ownerId = 42_001;
   const steps = buildCommandRegistrationPlan(ownerId);
   assert.equal(steps.length, 5);
@@ -38,9 +38,8 @@ test('buildCommandRegistrationPlan with owner adds chat_member scope', () => {
     action: 'set',
     commands: OWNER_PRIVATE_COMMANDS,
     scope: {
-      type: 'chat_member',
+      type: 'chat',
       chat_id: ownerId,
-      user_id: ownerId,
     },
   });
   assert.equal(

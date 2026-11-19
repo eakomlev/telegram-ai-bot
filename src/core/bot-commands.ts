@@ -9,7 +9,7 @@ export type CommandScope =
   | { type: 'default' }
   | { type: 'all_group_chats' }
   | { type: 'all_private_chats' }
-  | { type: 'chat_member'; chat_id: number; user_id: number };
+  | { type: 'chat'; chat_id: number };
 
 export type CommandRegistrationStep =
   | { action: 'set'; commands: BotCommandDef[]; scope: CommandScope }
@@ -35,7 +35,9 @@ export const OWNER_PRIVATE_COMMANDS: BotCommandDef[] = [
 
 /**
  * Pure plan for Telegram command-menu registration.
- * Owner private commands are scoped to chat_member (DM with OWNER_USER_ID only).
+ * Owner private commands use BotCommandScopeChat (`chat`) for the owner's DM.
+ * Private-chat resolution is: chat → all_private_chats → default.
+ * (chat_member is only consulted for groups/supergroups, not private chats.)
  */
 export function buildCommandRegistrationPlan(
   ownerUserId: number | undefined,
@@ -54,9 +56,8 @@ export function buildCommandRegistrationPlan(
       action: 'set',
       commands: OWNER_PRIVATE_COMMANDS,
       scope: {
-        type: 'chat_member',
+        type: 'chat',
         chat_id: ownerUserId,
-        user_id: ownerUserId,
       },
     });
   }
