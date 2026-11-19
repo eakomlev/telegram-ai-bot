@@ -1,6 +1,6 @@
 /**
  * Pure helpers for detecting when the bot joins a group/supergroup
- * and whether a welcome (help) message should be sent.
+ * and whether a welcome message should be sent.
  */
 
 export function isBotJoinTransition(oldStatus: string, newStatus: string): boolean {

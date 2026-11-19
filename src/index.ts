@@ -90,6 +90,20 @@ const help = `Я сохраняю текстовые сообщения и по�
 
 История до добавления бота недоступна. По умолчанию саммари могут запрашивать только администраторы.`;
 
+/** Short intro for when the bot is added to a group — aimed at regular members, not admins. */
+const joinWelcome = `Привет! Я в чате.
+
+Могу коротко рассказать, чем полезен участникам:
+• упомяните меня (@бот) или ответьте на моё сообщение — отвечу через OpenAI (текст, картинки, мемы вроде «демотиватор» / «drake»);
+• киньте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — скачаю видео;
+• ссылку на пост с картинками (Instagram, X, Reddit, Pixiv, Imgur) пришлю альбомом, на товар Wildberries — фото и название;
+• /gif — шуточная GIF по недавним сообщениям;
+• /summary и /verse — саммари переписки (иногда только для админов — смотрите настройки чата).
+
+Историю до моего появления в чате я не вижу.
+
+Подробности команд и настроек — в /help.`;
+
 function isBotOwner(ctx: Context) {
   return Boolean(ownerUserId && ctx.from?.id === ownerUserId && !ctx.msg?.sender_chat);
 }
@@ -294,7 +308,7 @@ bot.on('my_chat_member', async (ctx) => {
     return;
   }
   try {
-    await ctx.reply(help);
+    await ctx.reply(joinWelcome);
   } catch (error) {
     console.error('Join welcome failed', {
       chatId: ctx.chat.id,
