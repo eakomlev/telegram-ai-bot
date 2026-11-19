@@ -30,6 +30,7 @@ import {
   shouldPassPrivateMiddleware,
   shouldReplyToBlockedPrivate,
 } from './core/private-gate.js';
+import { buildCommandRegistrationPlan } from './core/bot-commands.js';
 import { shouldSendBotJoinWelcome } from './chat/bot-join.js';
 import { startStatus } from './core/status.js';
 
@@ -478,30 +479,17 @@ try {
   startAutoAnswerScheduler(bot.api);
   startPersonalizationScheduler(bot.api);
   startChatGcScheduler(bot.api);
-  const groupCommands = [
-    { command: 'summary', description: 'Саммари: N, 24h или 7d' },
-    { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
-    { command: 'gif', description: 'Шуточная GIF по последним сообщениям' },
-    { command: 'settings', description: 'Настройки группы (админы)' },
-    { command: 'usage', description: 'Токены OpenAI по группе (админы)' },
-    { command: 'help', description: 'Как пользоваться ботом' },
-    { command: 'privacy', description: 'Обработка данных' },
-    { command: 'chatid', description: 'ID этой группы' },
-  ];
-  await bot.api.setMyCommands(groupCommands);
-  await bot.api.setMyCommands(groupCommands, { scope: { type: 'all_group_chats' } });
-  await bot.api.setMyCommands(
-    [
-      { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
-      { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
-      { command: 'personalize', description: 'Выбор группы и запуск персонализации' },
-      {
-        command: 'personalize_results',
-        description: 'Просмотр характеристик участников',
-      },
-    ],
-    { scope: { type: 'all_private_chats' } },
-  );
+  for (const step of buildCommandRegistrationPlan(ownerUserId)) {
+    if (step.action === 'delete') {
+      await bot.api.deleteMyCommands({ scope: step.scope });
+      continue;
+    }
+    if (step.scope.type === 'default') {
+      await bot.api.setMyCommands(step.commands);
+    } else {
+      await bot.api.setMyCommands(step.commands, { scope: step.scope });
+    }
+  }
   await bot.start({
     allowed_updates: ['message', 'edited_message', 'callback_query', 'my_chat_member'],
     onStart: () => {
