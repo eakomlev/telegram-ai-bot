@@ -20,8 +20,10 @@ import {
   parsePersonalizeChatIdArg,
   PERSONALIZE_USAGE,
   PersonalizationBusyError,
+  selectManualPersonalizationChatIds,
   shouldRetryPersonalizationClaim,
 } from '../src/personalization/personalization-scheduler.js';
+import { shouldPassPrivateMiddleware } from '../src/core/private-gate.js';
 import {
   buildPersonalizePickerKeyboard,
   parsePersonalizeCallbackData,
@@ -215,6 +217,60 @@ test('filterEligibleManualPersonalizationChats applies allowlist when non-empty'
   );
   // Manual run requires explicit chatIds: empty input → empty (no “all chats” fallback)
   assert.deepEqual(filterEligibleManualPersonalizationChats([], new Set()), []);
+});
+
+test('selectManualPersonalizationChatIds: empty requested does not expand to all enabled', () => {
+  const enabled = [-100, -200, -300];
+  assert.deepEqual(selectManualPersonalizationChatIds([], enabled, new Set()), []);
+  assert.deepEqual(selectManualPersonalizationChatIds([-200], enabled, new Set()), [-200]);
+  assert.deepEqual(
+    selectManualPersonalizationChatIds([-100, -999], enabled, new Set(['-100', '-200'])),
+    [-100],
+  );
+});
+
+test('shouldPassPrivateMiddleware allows callbacks and owner personalize commands', () => {
+  // Regression: private middleware used to require message text, blocking pers: callbacks
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: true, messageText: '', isOwner: false }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/personalize',
+      isOwner: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/personalize@MyBot -100',
+      isOwner: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: '/stats', isOwner: true }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/personalize',
+      isOwner: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: '/help', isOwner: true }),
+    false,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({ hasCallbackQuery: false, messageText: 'hello', isOwner: true }),
+    false,
+  );
 });
 
 test('isPersonalizationRunInProgress is idle by default', () => {

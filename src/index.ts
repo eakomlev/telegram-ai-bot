@@ -25,6 +25,7 @@ import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
 import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/openai-costs.js';
 import { moscowDateString, moscowMonthStart } from './core/moscow-time.js';
 import { runDailyMemberSnapshots } from './chat/chat-members.js';
+import { shouldPassPrivateMiddleware } from './core/private-gate.js';
 import { startStatus } from './core/status.js';
 
 import { runGifReaction } from './gif/gif.js';
@@ -101,14 +102,23 @@ async function chatTitleOrId(chatId: number) {
 bot.use(async (ctx, next) => {
   if (stopping) return;
   if (ctx.chat?.type === 'private') {
-    const text = ctx.message?.text ?? '';
-    if (isBotOwner(ctx) && /^\/(?:stats|costs|personalize)(?:@\w+)?(?:\s|$)/i.test(text)) {
+    // Callbacks have no message text; pass through so pers:/set: handlers can run.
+    // Auth stays in the callback handlers (owner / admin checks).
+    const messageText = ctx.message?.text ?? '';
+    const isOwner = isBotOwner(ctx);
+    if (
+      shouldPassPrivateMiddleware({
+        hasCallbackQuery: Boolean(ctx.callbackQuery),
+        messageText,
+        isOwner,
+      })
+    ) {
       await next();
       return;
     }
-    if (text.startsWith('/')) {
+    if (messageText.startsWith('/')) {
       await ctx.reply(
-        ownerUserId && isBotOwner(ctx)
+        ownerUserId && isOwner
           ? 'В личке доступны только /stats, /costs и /personalize.'
           : 'Добавьте меня в групповой чат. Настройка: /setprivacy → Disable в @BotFather.',
       );

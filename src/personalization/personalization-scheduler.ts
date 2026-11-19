@@ -127,6 +127,20 @@ export function filterEligibleManualPersonalizationChats(
   return enabledChatIds.filter((chatId) => allowed.has(String(chatId)));
 }
 
+/**
+ * Resolve which chats a manual run will touch.
+ * Never expands empty `requestedChatIds` to “all enabled” — empty in → empty out.
+ */
+export function selectManualPersonalizationChatIds(
+  requestedChatIds: number[],
+  enabledChatIds: Iterable<number>,
+  allowed: ReadonlySet<string> = allowedChatIds,
+): number[] {
+  const enabled = new Set(enabledChatIds);
+  const filtered = requestedChatIds.filter((id) => enabled.has(id));
+  return filterEligibleManualPersonalizationChats(filtered, allowed);
+}
+
 /** Enabled personalization chats that pass ALLOWED_CHAT_IDS (if set). */
 export async function listEligibleManualPersonalizationChats(): Promise<number[]> {
   const enabled = await listEnabledPersonalizationChats();
@@ -163,11 +177,10 @@ async function runManual(
 
   const now = options.now ?? new Date();
   const moscowDate = moscowDateString(now);
-  const enabled = new Set(await listEnabledPersonalizationChats());
-  let chatIds = options.chatIds.filter((id) => enabled.has(id));
-  if (allowedChatIds.size) {
-    chatIds = chatIds.filter((chatId) => allowedChatIds.has(String(chatId)));
-  }
+  const chatIds = selectManualPersonalizationChatIds(
+    options.chatIds,
+    await listEnabledPersonalizationChats(),
+  );
   if (!chatIds.length) return [];
 
   const results: ManualPersonalizationChatResult[] = [];
