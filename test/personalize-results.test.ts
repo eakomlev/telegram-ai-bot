@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { filterChatIdsByAllowlist } from '../src/core/db.js';
 import { shouldPassPrivateMiddleware } from '../src/core/private-gate.js';
 import {
   buildChatPickerKeyboard,
   buildMemberPickerKeyboard,
+  buildProfileNavKeyboard,
   EMPTY_CHATS_TEXT,
   EMPTY_MEMBERS_TEXT,
   formatAllowlistDenied,
@@ -15,9 +19,12 @@ import {
   paginateItems,
   parsePersonalizeResultsCallbackData,
   PERSONALIZE_RESULTS_CALLBACK_PREFIX,
+  personalizeResultsRequiresPersonalizationEnabled,
   truncatePersonalizeResultsButtonLabel,
 } from '../src/personalization/personalize-results-ui.js';
 import { PERSONALIZE_CALLBACK_PREFIX } from '../src/personalization/personalize-ui.js';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 test('PERSONALIZE_RESULTS_CALLBACK_PREFIX is pres: and disjoint from pers:', () => {
   assert.equal(PERSONALIZE_RESULTS_CALLBACK_PREFIX, 'pres:');
@@ -158,6 +165,26 @@ test('buildMemberPickerKeyboard pagination uses chat page callbacks', () => {
   );
 });
 
+test('buildProfileNavKeyboard returns to member picker for that chat', () => {
+  const keyboard = buildProfileNavKeyboard(-10042);
+  const row = keyboard.inline_keyboard[0]!;
+  assert.equal(row[0]?.text, '‹ Назад');
+  assert.equal(
+    row[0] && 'callback_data' in row[0] ? row[0].callback_data : null,
+    'pres:chat:-10042',
+  );
+  assert.equal(row[1]?.text, 'Отмена');
+  assert.equal(
+    row[1] && 'callback_data' in row[1] ? row[1].callback_data : null,
+    'pres:cancel',
+  );
+  // Must not jump straight to the chat list from a profile view.
+  assert.notEqual(
+    row[0] && 'callback_data' in row[0] ? row[0].callback_data : null,
+    'pres:chats',
+  );
+});
+
 test('formatParticipantProfile uses full characteristic and Moscow timestamps', () => {
   const updated = new Date('2024-06-15T12:00:00.000Z');
   const sourceUntil = new Date('2024-06-14T12:00:00.000Z');
@@ -269,4 +296,39 @@ test('shouldPassPrivateMiddleware allows personalize_results and hyphen alias', 
     shouldPassPrivateMiddleware({ hasCallbackQuery: true, messageText: '', isOwner: false }),
     true,
   );
+});
+
+test('results browse path does not gate on PERSONALIZATION_ENABLED (unlike /personalize)', () => {
+  assert.equal(personalizeResultsRequiresPersonalizationEnabled(), false);
+
+  const resultsUi = readFileSync(
+    join(repoRoot, 'src/personalization/personalize-results-ui.ts'),
+    'utf8',
+  );
+  assert.equal(
+    resultsUi.includes('config.PERSONALIZATION_ENABLED'),
+    false,
+    'personalize-results-ui must not read config.PERSONALIZATION_ENABLED',
+  );
+
+  const indexSrc = readFileSync(join(repoRoot, 'src/index.ts'), 'utf8');
+  const resultsCmd = indexSrc.indexOf('handlePersonalizeResultsCommand');
+  const personalizeCmd = indexSrc.indexOf("bot.command('personalize'");
+  assert.ok(resultsCmd >= 0);
+  assert.ok(personalizeCmd >= 0);
+  // /personalize still checks the global flag; results command helper must not.
+  const personalizeBlock = indexSrc.slice(personalizeCmd, personalizeCmd + 800);
+  assert.match(personalizeBlock, /PERSONALIZATION_ENABLED/);
+  const resultsBlock = indexSrc.slice(resultsCmd, resultsCmd + 400);
+  assert.equal(resultsBlock.includes('PERSONALIZATION_ENABLED'), false);
+});
+
+test('listChatParticipantsWithCharacteristics SQL has no LIMIT (no silent truncation)', () => {
+  const dbSrc = readFileSync(join(repoRoot, 'src/core/db.ts'), 'utf8');
+  const start = dbSrc.indexOf('export async function listChatParticipantsWithCharacteristics');
+  assert.ok(start >= 0);
+  const end = dbSrc.indexOf('export function filterChatIdsByAllowlist', start);
+  const fn = dbSrc.slice(start, end > start ? end : start + 800);
+  assert.equal(/\bLIMIT\b/i.test(fn), false);
+  assert.equal(fn.includes('PERSONALIZATION_MAX_USERS_PER_CHAT'), false);
 });

@@ -1082,12 +1082,12 @@ export async function listChatsWithCharacteristics(
 }
 
 /**
- * Participants in a chat with a non-empty characteristic, newest activity first.
- * Same columns as {@link listChatParticipants}; does not change that helper's semantics.
+ * All participants in a chat with a non-empty characteristic, newest activity first.
+ * Same columns as {@link listChatParticipants}, but no LIMIT — browse UI must not hide
+ * profiles the way job-side PERSONALIZATION_MAX_USERS_PER_CHAT top-N does.
  */
 export async function listChatParticipantsWithCharacteristics(
   chatId: number,
-  limit = config.PERSONALIZATION_MAX_USERS_PER_CHAT,
 ): Promise<ChatParticipantRow[]> {
   const result = await pool.query<ChatParticipantDbRow>(
     `SELECT chat_id::text AS chat_id, user_id::text AS user_id, username, display_name, characteristic,
@@ -1095,9 +1095,8 @@ export async function listChatParticipantsWithCharacteristics(
      FROM chat_participants
      WHERE chat_id = $1
        AND characteristic IS NOT NULL AND btrim(characteristic) <> ''
-     ORDER BY last_seen_at DESC
-     LIMIT $2`,
-    [String(chatId), limit],
+     ORDER BY last_seen_at DESC`,
+    [String(chatId)],
   );
   return result.rows.map(mapChatParticipant);
 }

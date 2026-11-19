@@ -1,7 +1,6 @@
 import { InlineKeyboard, type Api, type Context } from 'grammy';
 import { allowedChatIds, config, ownerUserId } from '../config.js';
 import {
-  filterChatIdsByAllowlist,
   getChatParticipant,
   listChatParticipantsWithCharacteristics,
   listChatsWithCharacteristics,
@@ -13,6 +12,14 @@ import { splitReply } from '../summary/summary.js';
 export const PERSONALIZE_RESULTS_CALLBACK_PREFIX = 'pres:';
 
 export const PAGE_SIZE = 10;
+
+/**
+ * Browse/results path never requires PERSONALIZATION_ENABLED (unlike `/personalize` / `pers:`).
+ * Pure export for regression tests.
+ */
+export function personalizeResultsRequiresPersonalizationEnabled(): boolean {
+  return false;
+}
 
 const CHAT_PICKER_TEXT = 'Выберите группу:';
 const EMPTY_CHATS_TEXT = 'Нет групп с сохранёнными характеристиками участников.';
@@ -197,11 +204,11 @@ export function formatAllowlistDenied(chatId: number): string {
   return `Чат ${chatId} не входит в ALLOWED_CHAT_IDS.`;
 }
 
-export function filterResultsChatsByAllowlist(
-  chatIds: number[],
-  allowed: ReadonlySet<string> = allowedChatIds,
-): number[] {
-  return filterChatIdsByAllowlist(chatIds, allowed);
+/** Profile nav: back to this chat's member picker (page 0), plus Cancel. */
+export function buildProfileNavKeyboard(chatId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(PREV_LABEL, `${PERSONALIZE_RESULTS_CALLBACK_PREFIX}chat:${chatId}`)
+    .text(CANCEL_LABEL, `${PERSONALIZE_RESULTS_CALLBACK_PREFIX}cancel`);
 }
 
 async function chatLabel(api: Api, chatId: number): Promise<string> {
@@ -309,32 +316,28 @@ async function showUserProfile(
   const label = await chatLabel(api, chatId);
   const profile = formatParticipantProfile({ participant, chatLabel: label });
   const parts = splitReply(profile, config.TELEGRAM_MAX_MESSAGE_LENGTH);
-  const backKeyboard = new InlineKeyboard()
-    .text(
-      BACK_TO_CHATS_LABEL,
-      `${PERSONALIZE_RESULTS_CALLBACK_PREFIX}chats`,
-    )
-    .text(
-      CANCEL_LABEL,
-      `${PERSONALIZE_RESULTS_CALLBACK_PREFIX}cancel`,
-    );
-  // Prefer edit for the first chunk; remaining parts as follow-up replies.
+  const backKeyboard = buildProfileNavKeyboard(chatId);
+  const previewOff = { link_preview_options: { is_disabled: true as const } };
+  // Always attach nav on the first chunk so the owner is never stuck without buttons.
+  // When split across messages, also put nav on the last chunk.
   try {
     await ctx.editMessageText(parts[0]!, {
-      reply_markup: parts.length === 1 ? backKeyboard : undefined,
-      link_preview_options: { is_disabled: true },
+      reply_markup: backKeyboard,
+      ...previewOff,
     });
   } catch {
-    await ctx.reply(parts[0]!, {
-      reply_markup: parts.length === 1 ? backKeyboard : undefined,
-      link_preview_options: { is_disabled: true },
-    }).catch(() => {});
+    await ctx
+      .reply(parts[0]!, {
+        reply_markup: backKeyboard,
+        ...previewOff,
+      })
+      .catch(() => {});
   }
   for (let i = 1; i < parts.length; i += 1) {
     const isLast = i === parts.length - 1;
     await ctx.reply(parts[i]!, {
-      reply_markup: isLast ? backKeyboard : undefined,
-      link_preview_options: { is_disabled: true },
+      ...(isLast ? { reply_markup: backKeyboard } : {}),
+      ...previewOff,
     });
   }
 }
