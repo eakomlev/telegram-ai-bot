@@ -1,5 +1,7 @@
 import pg from 'pg';
+import { walkReplyChain } from '../chat/chat-context.js';
 import { config } from '../config.js';
+import { moscowDateString } from './moscow-time.js';
 import type { ChatMessage, Selection } from '../summary/summary.js';
 
 export const pool = new pg.Pool({
@@ -11,7 +13,7 @@ export const pool = new pg.Pool({
 });
 pool.on('error', () => console.error('Postgres connection error'));
 
-export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer';
+export type OpenAiUsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer' | 'chat_memory';
 
 export type OpenAiUsageRecord = {
   kind: OpenAiUsageKind;
@@ -735,14 +737,17 @@ export async function deleteVideoCache(sourceUrl: string) {
 }
 
 export async function saveMessage(chatId: number, message: ChatMessage) {
-  await pool.query(`INSERT INTO messages (chat_id, message_id, author, text, sent_at, message_thread_id, is_bot, author_user_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  await pool.query(`INSERT INTO messages (
+      chat_id, message_id, author, text, sent_at, message_thread_id, is_bot, author_user_id, reply_to_message_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT (chat_id, message_id) DO UPDATE SET
       author = EXCLUDED.author,
       text = EXCLUDED.text,
       message_thread_id = EXCLUDED.message_thread_id,
       is_bot = EXCLUDED.is_bot,
-      author_user_id = EXCLUDED.author_user_id`,
+      author_user_id = EXCLUDED.author_user_id,
+      reply_to_message_id = EXCLUDED.reply_to_message_id`,
   [
     String(chatId),
     message.message_id,
@@ -752,6 +757,7 @@ export async function saveMessage(chatId: number, message: ChatMessage) {
     message.message_thread_id ?? null,
     message.is_bot ?? false,
     message.author_user_id ?? null,
+    message.reply_to_message_id ?? null,
   ]);
 }
 
@@ -764,8 +770,10 @@ export async function persistBotMessage(
     text?: string;
     caption?: string;
     message_thread_id?: number;
+    reply_to_message?: { message_id: number };
   },
   authorLabel: string,
+  replyToMessageId?: number | null,
 ) {
   const text = (sentMessage.text ?? sentMessage.caption ?? '').trim();
   if (!text) return;
@@ -776,6 +784,7 @@ export async function persistBotMessage(
     sent_at: new Date(sentMessage.date * 1000),
     message_thread_id: sentMessage.message_thread_id ?? null,
     is_bot: true,
+    reply_to_message_id: replyToMessageId ?? sentMessage.reply_to_message?.message_id ?? null,
   });
 }
 
@@ -862,7 +871,9 @@ export async function listKnownChatIds(): Promise<number[]> {
      UNION
      SELECT chat_id::text FROM pending_auto_answers
      UNION
-     SELECT chat_id::text FROM summary_requests`,
+     SELECT chat_id::text FROM summary_requests
+     UNION
+     SELECT chat_id::text FROM chat_memory`,
   );
   return result.rows
     .map((row) => Number(row.chat_id))
@@ -880,6 +891,7 @@ export async function purgeChatData(chatId: number): Promise<void> {
     await client.query('BEGIN');
     await client.query('DELETE FROM pending_auto_answers WHERE chat_id = $1', [id]);
     await client.query('DELETE FROM messages WHERE chat_id = $1', [id]);
+    await client.query('DELETE FROM chat_memory WHERE chat_id = $1', [id]);
     await client.query('DELETE FROM summary_requests WHERE chat_id = $1', [id]);
     await client.query('DELETE FROM chat_member_snapshots WHERE chat_id = $1', [id]);
     await client.query('DELETE FROM openai_usage WHERE chat_id = $1', [id]);
@@ -974,4 +986,239 @@ export async function cleanup() {
 
 export async function deleteMessage(chatId: number, messageId: number) {
   await pool.query('DELETE FROM messages WHERE chat_id = $1 AND message_id = $2', [String(chatId), messageId]);
+}
+
+const MESSAGE_COLUMNS = `message_id, author, text, sent_at, message_thread_id, is_bot, author_user_id, reply_to_message_id`;
+
+/** Reply parent stored for one message, or null when the row or parent is absent. */
+export async function selectMessageReplyParent(chatId: number, messageId: number): Promise<number | null> {
+  const result = await pool.query<{ reply_to_message_id: number | null }>(
+    `SELECT reply_to_message_id FROM messages WHERE chat_id = $1 AND message_id = $2`,
+    [String(chatId), messageId],
+  );
+  return result.rows[0]?.reply_to_message_id ?? null;
+}
+
+/**
+ * Load a reply chain by primary key, then return it chronologically (root first).
+ * At most maxMessages queries. No message_thread_id filter.
+ */
+export async function selectReplyChain(params: {
+  chatId: number;
+  startMessageId: number;
+  maxMessages: number;
+}): Promise<ChatMessage[]> {
+  if (params.maxMessages <= 0) return [];
+  const rowsById = new Map<number, ChatMessage>();
+  const queried = new Set<number>();
+  let currentId: number | null = params.startMessageId;
+  while (currentId != null && rowsById.size < params.maxMessages && !queried.has(currentId)) {
+    const lookupId: number = currentId;
+    queried.add(lookupId);
+    const result: pg.QueryResult<ChatMessage> = await pool.query<ChatMessage>(
+      `SELECT ${MESSAGE_COLUMNS}
+       FROM messages
+       WHERE chat_id = $1 AND message_id = $2`,
+      [String(params.chatId), lookupId],
+    );
+    const row: ChatMessage | undefined = result.rows[0];
+    if (!row) break;
+    rowsById.set(row.message_id, row);
+    currentId = row.reply_to_message_id ?? null;
+  }
+  return walkReplyChain(rowsById, params.startMessageId, params.maxMessages);
+}
+
+export async function getChatMemory(chatId: number): Promise<{ body: string; pinned: string }> {
+  const result = await pool.query<{ body: string; pinned: string }>(
+    `SELECT body, pinned FROM chat_memory WHERE chat_id = $1`,
+    [String(chatId)],
+  );
+  const row = result.rows[0];
+  if (!row) return { body: '', pinned: '' };
+  return { body: row.body ?? '', pinned: row.pinned ?? '' };
+}
+
+/**
+ * Read-modify-write pinned facts under a row lock.
+ * fn returns the next pinned text, or null to leave the row unchanged.
+ * 'conflict' means the UPDATE matched 0 rows (the row disappeared during the lock).
+ */
+export async function withChatMemoryPins(
+  chatId: number,
+  fn: (pinned: string) => string | null,
+): Promise<'ok' | 'conflict' | 'missing-row-inserted'> {
+  const client = await pool.connect();
+  const id = String(chatId);
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query<{ pinned: string }>(
+      `SELECT pinned FROM chat_memory WHERE chat_id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (existing.rows.length === 0) {
+      const next = fn('');
+      if (next == null) {
+        await client.query('COMMIT');
+        return 'ok';
+      }
+      const inserted = await client.query(
+        `INSERT INTO chat_memory (chat_id, pinned, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (chat_id) DO NOTHING
+         RETURNING chat_id`,
+        [id, next],
+      );
+      if ((inserted.rowCount ?? 0) === 0) {
+        await client.query('ROLLBACK');
+        return 'conflict';
+      }
+      await client.query('COMMIT');
+      return 'missing-row-inserted';
+    }
+
+    const old = existing.rows[0]!.pinned ?? '';
+    const next = fn(old);
+    if (next == null || next === old) {
+      await client.query('COMMIT');
+      return 'ok';
+    }
+    const updated = await client.query(
+      `UPDATE chat_memory
+       SET pinned = $2, updated_at = now()
+       WHERE chat_id = $1 AND pinned IS NOT DISTINCT FROM $3`,
+      [id, next, old],
+    );
+    if ((updated.rowCount ?? 0) === 0) {
+      await client.query('ROLLBACK');
+      return 'conflict';
+    }
+    await client.query('COMMIT');
+    return 'ok';
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Chats that still need a memory merge for the Moscow date of `now`. */
+export async function listChatMemoryCandidates(now: Date): Promise<number[]> {
+  const today = moscowDateString(now);
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT chat_id::text AS chat_id FROM (
+       SELECT DISTINCT chat_id FROM messages WHERE is_bot = false
+       UNION
+       SELECT chat_id FROM chat_memory
+     ) AS known
+     WHERE NOT EXISTS (
+       SELECT 1 FROM chat_memory memory
+       WHERE memory.chat_id = known.chat_id
+         AND (
+           (memory.last_run_on IS NOT NULL AND memory.last_run_on >= $1::date)
+           OR (memory.claimed_until IS NOT NULL AND memory.claimed_until > $2::timestamptz)
+         )
+     )`,
+    [today, now],
+  );
+  return result.rows
+    .map((row) => Number(row.chat_id))
+    .filter((id) => Number.isSafeInteger(id));
+}
+
+/** Claim one chat for the memory merge. True only when a row is returned. */
+export async function claimChatMemory(
+  chatId: number,
+  moscowDate: string,
+  leaseUntil: Date,
+  now: Date,
+): Promise<boolean> {
+  const result = await pool.query(
+    `INSERT INTO chat_memory (chat_id, claimed_until)
+     VALUES ($1, $2)
+     ON CONFLICT (chat_id) DO UPDATE
+     SET claimed_until = EXCLUDED.claimed_until
+     WHERE (chat_memory.last_run_on IS NULL OR chat_memory.last_run_on < $3::date)
+       AND (chat_memory.claimed_until IS NULL OR chat_memory.claimed_until <= $4::timestamptz)
+     RETURNING chat_id`,
+    [String(chatId), leaseUntil, moscowDate, now],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Mark the Moscow day done without touching body or pinned. */
+export async function markChatMemorySoftSkipped(
+  chatId: number,
+  moscowDate: string,
+  leaseUntil: Date,
+): Promise<void> {
+  await pool.query(
+    `UPDATE chat_memory
+     SET last_run_on = $2::date,
+         claimed_until = NULL,
+         updated_at = now()
+     WHERE chat_id = $1
+       AND claimed_until = $3::timestamptz`,
+    [String(chatId), moscowDate, leaseUntil],
+  );
+}
+
+/** Store a successful merge. Does not change pinned. */
+export async function completeChatMemory(params: {
+  chatId: number;
+  body: string;
+  sourceUntil: Date | null;
+  moscowDate: string;
+  leaseUntil: Date;
+}): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE chat_memory
+     SET body = $2,
+         source_until = $3,
+         last_run_on = $4::date,
+         claimed_until = NULL,
+         updated_at = now()
+     WHERE chat_id = $1
+       AND claimed_until = $5::timestamptz`,
+    [
+      String(params.chatId),
+      params.body,
+      params.sourceUntil,
+      params.moscowDate,
+      params.leaseUntil,
+    ],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Messages in the memory window, including bot replies. Newest first. */
+export async function selectMessagesForChatMemory(params: {
+  chatId: number;
+  since: Date;
+  limit: number;
+}): Promise<ChatMessage[]> {
+  if (params.limit <= 0) return [];
+  const result = await pool.query<ChatMessage>(
+    `SELECT ${MESSAGE_COLUMNS}
+     FROM messages
+     WHERE chat_id = $1
+       AND sent_at >= $2
+     ORDER BY sent_at DESC, message_id DESC
+     LIMIT $3`,
+    [String(params.chatId), params.since, params.limit],
+  );
+  return result.rows;
+}
+
+export async function countHumanMessagesSince(chatId: number, since: Date): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM messages
+     WHERE chat_id = $1
+       AND is_bot = false
+       AND sent_at >= $2`,
+    [String(chatId), since],
+  );
+  return Number(result.rows[0]?.count) || 0;
 }

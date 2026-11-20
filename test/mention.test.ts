@@ -11,9 +11,21 @@ import {
   quotedContext,
   setBotIdentity,
   stripBotMention,
+  type MentionPromptBudgets,
 } from '../src/mention/mention.js';
 import { buildMentionSystemPrompt } from '../src/ai/ai.js';
 import type { Message } from 'grammy/types';
+
+function defaultBudgets(overrides: Partial<MentionPromptBudgets> = {}): MentionPromptBudgets {
+  return {
+    requestMaxChars: 1500,
+    quoteMaxChars: 1500,
+    recentMaxChars: 4000,
+    aroundQuoteMaxChars: 1200,
+    threadMaxChars: 2000,
+    ...overrides,
+  };
+}
 
 setBotIdentity(42, 'SummaryBot');
 
@@ -81,56 +93,35 @@ test('strips bot mention from prompt text', () => {
 });
 
 test('builds prompt with quoted reply context', () => {
-  const prompt = buildMentionPrompt('что он имел в виду?', { author: 'Аня', text: 'Сделаем завтра' }, 1500);
+  const prompt = buildMentionPrompt(
+    'что он имел в виду?',
+    { author: 'Аня', text: 'Сделаем завтра' },
+    defaultBudgets(),
+  );
   assert.match(prompt, /Цитата \(Аня\):/);
   assert.match(prompt, /Сделаем завтра/);
   assert.match(prompt, /Запрос:\nчто он имел в виду\?/);
   assert.doesNotMatch(prompt, /Контекст/);
 });
 
-test('empty preceding leaves quote+request format unchanged', () => {
-  const without = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, 1500);
-  const withEmpty = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, 1500, false, []);
+test('empty blocks leave quote+request format unchanged', () => {
+  const without = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, defaultBudgets());
+  const withEmpty = buildMentionPrompt('что?', { author: 'Аня', text: 'ок' }, defaultBudgets(), false, {});
   assert.equal(withEmpty, without);
 });
 
-test('includes preceding messages before the quote', () => {
-  const prompt = buildMentionPrompt(
-    'что он имел в виду?',
-    { author: 'Аня', text: 'Сделаем завтра' },
-    1500,
-    false,
-    [
-      { author: 'Боря', text: 'Кто свободен?' },
-      { author: 'Аня', text: 'Я могу после обеда' },
-    ],
-  );
-  assert.equal(
-    prompt,
-    [
-      'Контекст (сообщения до цитаты):',
-      '[Боря]: Кто свободен?',
-      '[Аня]: Я могу после обеда',
-      '',
-      'Цитата (Аня):',
-      'Сделаем завтра',
-      '',
-      'Запрос:',
-      'что он имел в виду?',
-    ].join('\n'),
-  );
-});
-
-test('includes preceding messages for a plain mention without quote', () => {
+test('includes recent messages for a plain mention without quote', () => {
   const prompt = buildMentionPrompt(
     'что решили?',
     undefined,
-    1500,
+    defaultBudgets(),
     false,
-    [
-      { author: 'Боря', text: 'Может в пятницу?' },
-      { author: 'Аня', text: 'Да, давайте' },
-    ],
+    {
+      recent: [
+        { author: 'Боря', text: 'Может в пятницу?' },
+        { author: 'Аня', text: 'Да, давайте' },
+      ],
+    },
   );
   assert.equal(
     prompt,
@@ -145,53 +136,89 @@ test('includes preceding messages for a plain mention without quote', () => {
   );
 });
 
-test('plain mention without preceding stays a bare request', () => {
-  assert.equal(buildMentionPrompt('привет', undefined, 1500), 'привет');
-  assert.equal(buildMentionPrompt('привет', undefined, 1500, false, []), 'привет');
+test('plain mention without blocks stays a bare request', () => {
+  assert.equal(buildMentionPrompt('привет', undefined, defaultBudgets()), 'привет');
+  assert.equal(buildMentionPrompt('привет', undefined, defaultBudgets(), false, {}), 'привет');
 });
 
-test('drops preceding before truncating quote or request when budget is tight', () => {
-  const request = 'что имелось в виду?';
-  const quote = 'x'.repeat(80);
-  // Barely enough for quote+request (budget ≥ 40), little room for preceding.
-  const maxChars = `Цитата (Аня):\n${quote}\n\nЗапрос:\n${request}`.length + 10;
+test('recent window drops the older line and leaves request and quote intact', () => {
+  const request = 'ЗапросТекст' + 'r'.repeat(1400);
+  const quote = 'ЦитатаТекст' + 'q'.repeat(1400);
   const prompt = buildMentionPrompt(
     request,
     { author: 'Аня', text: quote },
-    maxChars,
+    defaultBudgets({ recentMaxChars: 40, requestMaxChars: 2000, quoteMaxChars: 2000 }),
     false,
+    {
+      recent: [
+        { author: 'Old', text: 'старое сообщение которое не влезет' },
+        { author: 'New', text: 'свежо' },
+      ],
+    },
+  );
+  assert.match(prompt, /\[New\]: свежо/);
+  assert.doesNotMatch(prompt, /\[Old\]/);
+  assert.ok(prompt.includes(request));
+  assert.ok(prompt.includes(quote));
+  assert.ok(prompt.length > 1500);
+});
+
+test('request and quote are truncated on their own budgets', () => {
+  const request = 'R'.repeat(2000);
+  const quote = 'Q'.repeat(3000);
+  const prompt = buildMentionPrompt(
+    request,
+    { author: 'A', text: quote },
+    defaultBudgets({ requestMaxChars: 100, quoteMaxChars: 50 }),
+  );
+  const requestBody = prompt.split('Запрос:\n')[1] ?? '';
+  assert.equal(requestBody.length, 100);
+  assert.ok(requestBody.startsWith('R'));
+  assert.ok(requestBody.endsWith('…'));
+  const quoteBody = (prompt.split('Цитата (A):\n')[1] ?? '').split('\n\n')[0] ?? '';
+  assert.equal(quoteBody.length, 50);
+  assert.ok(quoteBody.startsWith('Q'));
+  assert.ok(quoteBody.endsWith('…'));
+  assert.ok(prompt.length > 150);
+  assert.equal(prompt.includes('R'.repeat(101)), false);
+  assert.equal(prompt.includes('Q'.repeat(51)), false);
+});
+
+test('three context blocks stay in order before quote and request', () => {
+  const prompt = buildMentionPrompt(
+    'вопрос',
+    { author: 'Аня', text: 'цитата' },
+    defaultBudgets(),
+    false,
+    {
+      recent: [{ author: 'R', text: 'недавнее', messageId: 1 }],
+      aroundQuote: [{ author: 'Q', text: 'рядом', messageId: 2 }],
+      thread: [{ author: 'T', text: 'ветка', messageId: 3 }],
+    },
+  );
+  assert.equal(
+    prompt,
     [
-      { author: 'Old', text: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
-      { author: 'Mid', text: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
-    ],
+      'Контекст (недавние сообщения):',
+      '[R]: недавнее',
+      '',
+      'Контекст (рядом с цитатой):',
+      '[Q]: рядом',
+      '',
+      'Ветка обсуждения:',
+      '[T]: ветка',
+      '',
+      'Цитата (Аня):',
+      'цитата',
+      '',
+      'Запрос:',
+      'вопрос',
+    ].join('\n'),
   );
-  assert.doesNotMatch(prompt, /Контекст/);
-  assert.match(prompt, /Цитата \(Аня\):/);
-  assert.match(prompt, new RegExp(`Запрос:\\n${request}`));
-  assert.ok(prompt.length <= maxChars);
-});
-
-test('omits preceding when quote+request budget is under 40', () => {
-  const request = 'ок?';
-  const quote = 'коротко';
-  // Force compact path: header+footer leave < 40 for the quote body.
-  const header = 'Цитата (Аня):\n';
-  const footer = `\n\nЗапрос:\n${request}`;
-  const maxChars = header.length + footer.length + 10;
-  const prompt = buildMentionPrompt(
-    request,
-    { author: 'Аня', text: quote },
-    maxChars,
-    false,
-    [{ author: 'Боря', text: 'контекст который не должен попасть' }],
-  );
-  assert.doesNotMatch(prompt, /Контекст/);
-  assert.doesNotMatch(prompt, /контекст который не должен попасть/);
-  assert.match(prompt, /Запрос: ок\?/);
 });
 
 test('quote-only mention gets a default request', () => {
-  const prompt = buildMentionPrompt('', { author: 'Боря', text: 'Нужен деплой' }, 1500);
+  const prompt = buildMentionPrompt('', { author: 'Боря', text: 'Нужен деплой' }, defaultBudgets());
   assert.match(prompt, /Нужен деплой/);
   assert.match(prompt, /прокомментируй/i);
 });
@@ -236,7 +263,7 @@ test('collectMessageImageFileIds prefers the largest photo and image documents',
 });
 
 test('image-only context gets a default request', () => {
-  assert.match(buildMentionPrompt('', undefined, 1500, true), /изображен/);
+  assert.match(buildMentionPrompt('', undefined, defaultBudgets(), true), /изображен/);
 });
 
 test('detects meme keywords and ignores plain image requests', () => {
@@ -273,16 +300,24 @@ test('meme system prompt forces friendly meme image instructions', () => {
   assert.doesNotMatch(plain, /Пользователь просит мем/);
 });
 
-test('mention system prompt explains preceding context blocks', () => {
+test('mention system prompt explains context blocks and does not sound like support', () => {
   const plain = buildMentionSystemPrompt(0, true, 2, false, false);
-  assert.match(plain, /Контекст \(сообщения до цитаты\)/);
+  assert.doesNotMatch(plain, /полезный ассистент/);
+  assert.doesNotMatch(plain, /Пользователь просит мем/);
   assert.match(plain, /Контекст \(недавние сообщения\)/);
+  assert.match(plain, /Контекст \(рядом с цитатой\)/);
+  assert.match(plain, /Ветка обсуждения/);
   assert.match(plain, /Запрос/);
   assert.match(plain, /Цитата/);
   assert.match(plain, /собственные более ранние ответы/i);
   const meme = buildMentionSystemPrompt(0, true, 2, false, true);
   assert.match(meme, /Контекст \(недавние сообщения\)/);
+  assert.match(meme, /Контекст \(рядом с цитатой\)/);
+  assert.match(meme, /Ветка обсуждения/);
   assert.match(meme, /собственные более ранние ответы/i);
+  assert.match(meme, /мем/i);
+  assert.match(meme, /Если сообщение пользователя начинается с блока «Память чата»/);
+  assert.doesNotMatch(meme, /шутки про дедлайн/);
 });
 
 test('getBotAuthorLabel uses @username when identity is set', async () => {
@@ -292,12 +327,18 @@ test('getBotAuthorLabel uses @username when identity is set', async () => {
 });
 
 
-test('long quotes never displace the current request and stay within budget', () => {
-  const request = 'REQUEST_' + 'r'.repeat(1450);
-  const prompt = buildMentionPrompt(request, { author: 'A', text: 'q'.repeat(3000) }, 1500);
-  assert.ok(prompt.includes(request));
-  assert.ok(prompt.length <= 1500);
-  const oversized = buildMentionPrompt('REQUEST_' + 'r'.repeat(3000), { author: 'A', text: 'q'.repeat(3000) }, 1500);
-  assert.ok(oversized.includes('REQUEST_'));
-  assert.ok(oversized.length <= 1500);
+test('a long request is capped alone and a long quote is capped at quoteMaxChars', () => {
+  const request = 'REQUEST_' + 'r'.repeat(3000);
+  const prompt = buildMentionPrompt(
+    request,
+    { author: 'A', text: 'q'.repeat(3000) },
+    defaultBudgets({ requestMaxChars: 1500, quoteMaxChars: 1500 }),
+  );
+  const requestBody = prompt.split('Запрос:\n')[1] ?? '';
+  const quoteBody = (prompt.split('Цитата (A):\n')[1] ?? '').split('\n\n')[0] ?? '';
+  assert.equal(requestBody.length, 1500);
+  assert.ok(requestBody.startsWith('REQUEST_'));
+  assert.equal(quoteBody.length, 1500);
+  assert.ok(quoteBody.startsWith('q'));
+  assert.ok(prompt.length > 1500);
 });

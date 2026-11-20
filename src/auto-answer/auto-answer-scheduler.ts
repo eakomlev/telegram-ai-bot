@@ -1,6 +1,7 @@
 import type { Api } from 'grammy';
 import { replyToUnansweredQuestion } from '../ai/ai.js';
-import { trimPrecedingContext, type ChatContextMessage } from '../chat/chat-context.js';
+import { formatContextLine, trimPrecedingContext, type ChatContextMessage } from '../chat/chat-context.js';
+import { formatChatMemoryBlock } from '../chat/chat-memory.js';
 import { resolveChatSettings, type ResponseTone } from '../chat/chat-settings.js';
 import { allowedChatIds, config } from '../config.js';
 import {
@@ -13,9 +14,12 @@ import {
   persistPendingAutoAnswerText,
   reclaimSendingAutoAnswerForSendRetry,
   listDuePendingAutoAnswers,
+  getChatMemory,
   persistBotMessage,
   recordOpenAiUsage,
+  selectMessageReplyParent,
   selectPrecedingMessages,
+  selectReplyChain,
   type PendingAutoAnswer,
 } from '../core/db.js';
 import { getBotAuthorLabel } from '../mention/mention.js';
@@ -80,6 +84,35 @@ async function loadAutoAnswerContext(row: PendingAutoAnswer): Promise<ChatContex
   }
 }
 
+async function loadAutoAnswerThread(row: PendingAutoAnswer): Promise<string> {
+  if (config.MENTION_THREAD_MAX_MESSAGES <= 0) return '';
+  try {
+    const parentId = await selectMessageReplyParent(row.chatId, row.messageId);
+    if (parentId == null) return '';
+    const chain = await selectReplyChain({
+      chatId: row.chatId,
+      startMessageId: parentId,
+      maxMessages: config.MENTION_THREAD_MAX_MESSAGES,
+    });
+    const trimmed = trimPrecedingContext(
+      chain.map((message) => ({ author: message.author, text: message.text })),
+      config.MENTION_THREAD_MAX_CHARS,
+    );
+    const lines = trimmed
+      .map(formatContextLine)
+      .filter((line) => !/^\[.+\]:\s*$/.test(line));
+    if (!lines.length) return '';
+    return `Ветка обсуждения:\n${lines.join('\n')}`;
+  } catch (error) {
+    console.error('Auto-answer thread load failed', {
+      chatId: row.chatId,
+      messageId: row.messageId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return '';
+  }
+}
+
 async function ensureAnswerText(
   row: PendingAutoAnswer,
   lease: Date,
@@ -90,6 +123,22 @@ async function ensureAnswerText(
   if (!needsOpenAiGeneration(row.answerText)) return row.answerText!.trim();
 
   const contextMessages = await loadAutoAnswerContext(row);
+  const threadBlock = await loadAutoAnswerThread(row);
+  let memoryBlock = '';
+  try {
+    const memory = await getChatMemory(row.chatId);
+    memoryBlock = formatChatMemoryBlock({
+      body: memory.body,
+      pinned: memory.pinned,
+      bodyMaxChars: config.CHAT_MEMORY_PROMPT_MAX_CHARS,
+      pinMaxChars: config.CHAT_MEMORY_PIN_MAX_CHARS,
+    });
+  } catch (error) {
+    console.error('Chat memory load failed', {
+      chatId: row.chatId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   let text: string;
   let usage: Awaited<ReturnType<typeof replyToUnansweredQuestion>>['usage'];
@@ -100,6 +149,7 @@ async function ensureAnswerText(
       sarcasmLevel,
       contextMessages,
       responseTone,
+      { threadBlock, memoryBlock },
     ));
   } catch (error) {
     console.error('Auto-answer OpenAI failed', {
@@ -156,7 +206,7 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer) {
       ...(row.messageThreadId != null ? { message_thread_id: row.messageThreadId } : {}),
       link_preview_options: { is_disabled: true },
     });
-    await persistBotMessage(row.chatId, sent, getBotAuthorLabel()).catch(() => {
+    await persistBotMessage(row.chatId, sent, getBotAuthorLabel(), row.messageId).catch(() => {
       console.error('Bot message persist failed', {
         chatId: row.chatId,
         messageId: sent.message_id,

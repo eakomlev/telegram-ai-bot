@@ -25,7 +25,7 @@
 
 6. Добавьте бота в группу, предупредите участников о сохранении сообщений и передаче выбранной переписки в OpenAI. Отправьте несколько сообщений, затем `/summary` от аккаунта администратора.
 
-Схема БД применяется SQL-миграциями при старте (`src/core/migrate.ts`, baseline `001_baseline.sql`). Новые изменения — файлы `002_….sql` в `src/core/migrations/`; `npm run build` копирует SQL в `dist`. Volume `postgres_data` при обычном `down` не стирается. Postgres наружу не публикуется. Перед первым запуском удалите старый webhook, если он был установлен другим приложением.
+Схема БД применяется SQL-миграциями при старте (`src/core/migrate.ts`, baseline `001_baseline.sql`, далее `002_drop_personalization.sql` и `003_chat_memory.sql`). Новые изменения — следующие `NNN_….sql` в `src/core/migrations/`; `npm run build` копирует SQL в `dist`. Volume `postgres_data` при обычном `down` не стирается. Postgres наружу не публикуется. Перед первым запуском удалите старый webhook, если он был установлен другим приложением.
 
 ## Архитектура кода
 
@@ -37,7 +37,7 @@ src/
   config.ts                # Zod + env
   core/                    # db, migrate.ts + migrations/, очереди AI/media, process, status, moscow-time
   ai/                      # OpenAI-вызовы, usage/$, openai-costs (Admin API /costs + usage tokens)
-  chat/                    # настройки чата, UI /settings, контекст, снимки участников, chat GC
+  chat/                    # настройки, контекст, chat-memory.ts, chat-memory-scheduler.ts, chat-memory-commands.ts, снимки участников, chat GC
   summary/                 # выборка и нарезка текста для саммари
   mention/                 # @упоминания и reply-to-bot
   auto-answer/             # очередь и планировщик автоответов
@@ -57,6 +57,9 @@ src/
 | `/gif` | GIF-реакция по недавним сообщениям (нужен `GIPHY_API_KEY`) |
 | `/gif 40` / `/gif 24h` | То же с числом или периодом |
 | `/settings` | Inline-меню настроек группы (только админы) |
+| `/memory` | Память чата и закреплённые факты (только админы) |
+| `/remember текст` | Добавить закреплённый факт (только админы) |
+| `/forget` / `/forget N` | Очистить все закреплённые факты или удалить факт номер N |
 | `/usage` | Токены за текущий месяц по группе (админы) |
 | `/stats` | Рост чатов/участников за месяц (МСК) и токены по чатам — только в личке у `OWNER_USER_ID` |
 | `/costs` | Официальные расходы и токены completions организации OpenAI за текущий месяц (МСК, MTD) — только в личке у `OWNER_USER_ID`; нужен `OPENAI_ADMIN_API_KEY` |
@@ -74,7 +77,7 @@ src/
 
 ### Саммари и `/verse`
 
-Выборка по числу сообщений или периоду, укладка в JSON-бюджет `MAX_INPUT_CHARS`, ответ до `MAX_OUTPUT_TOKENS`. Уровень сарказма (`SUMMARY_SARCASM_PERCENT` / `/settings`) и тон ответа влияют на промпт. Кулдаун группы — `SUMMARY_COOLDOWN_SECONDS` (по умолчанию **10**). Неуспешный запрос тоже занимает кулдаун. Повторные запросы оплачиваются заново.
+Выборка по числу сообщений или периоду, укладка в JSON-бюджет `MAX_INPUT_CHARS`, ответ до `MAX_OUTPUT_TOKENS`. Уровень сарказма (`SUMMARY_SARCASM_PERCENT` / `/settings`) и тон ответа влияют на промпт. Память чата, если она есть, передаётся в сообщении пользователя как недоверенный фон: саммари строится по выбранным сообщениям и не должно выдумывать события из памяти. Кулдаун группы — `SUMMARY_COOLDOWN_SECONDS` (по умолчанию **10**). Неуспешный запрос тоже занимает кулдаун. Повторные запросы оплачиваются заново.
 
 ### `/gif`
 
@@ -82,11 +85,15 @@ src/
 
 ### @упоминания
 
-Глобальный gate `MENTION_ENABLED` + переключатель в `/settings`. Срабатывает на @бота / `text_mention` / reply на сообщение бота. В контекст входят текст/подпись запроса и цитаты, до `MENTION_MAX_INPUT_IMAGES` картинок (vision, `MENTION_VISION_*`, размер `MENTION_MAX_INPUT_IMAGE_MB`), плюс окно предшествующих сообщений (`MENTION_CONTEXT_*`). Ответ может содержать до `MENTION_MAX_IMAGES` сгенерированных картинок (`OPENAI_IMAGE_MODEL`); ключевые слова вроде «мем»/«демотиватор» включают meme-режим. При `MENTION_WEB_SEARCH=true` обычные текстовые ответы идут через Responses API + hosted `web_search` (`tool_choice` auto — поиск не обязателен; размер контекста поиска — `NEWS_SEARCH_CONTEXT_SIZE`; нужен тот же `/v1/responses` + `web_search`, что и для новостей); входные фото по-прежнему передаются в модель (vision). Мемы и явные запросы на генерацию картинок («нарисуй…», `generate image`, …) остаются на Chat Completions с `attach_image`. `MENTION_WEB_SEARCH=false` — Completions для всех упоминаний без веба. Кулдаун `MENTION_COOLDOWN_SECONDS`.
+Глобальный gate `MENTION_ENABLED` + переключатель в `/settings`. Срабатывает на @бота / `text_mention` / reply на сообщение бота. Промпт собирается из отдельных блоков со своими бюджетами: текст запроса (`MENTION_MAX_INPUT_CHARS` режет только запрос, не весь промпт), цитата (`MENTION_QUOTE_MAX_CHARS`), цепочка ответов к цитате (`MENTION_THREAD_*`), короткое окно рядом со старой цитатой (`MENTION_AROUND_QUOTE_*`) и более широкое окно недавних сообщений перед обращением (`MENTION_CONTEXT_*`, по умолчанию 40 сообщений / 45 минут / 4000 символов). Контекст не урезает запрос и цитату. Ночная память и закреплённые факты попадают в сообщение пользователя как недоверенный фон, не в системный промпт. Цитата из другого чата (например, пост связанного канала) в выборку по id не берётся. До `MENTION_MAX_INPUT_IMAGES` картинок (vision, `MENTION_VISION_*`, размер `MENTION_MAX_INPUT_IMAGE_MB`). Ответ может содержать до `MENTION_MAX_IMAGES` сгенерированных картинок (`OPENAI_IMAGE_MODEL`); ключевые слова вроде «мем»/«демотиватор» включают meme-режим. При `MENTION_WEB_SEARCH=true` обычные текстовые ответы идут через Responses API + hosted `web_search` (`tool_choice` auto — поиск не обязателен; размер контекста поиска — `NEWS_SEARCH_CONTEXT_SIZE`; для `gpt-6*` reasoning effort `medium`; нужен `/v1/responses` + `web_search`); входные фото по-прежнему передаются в модель (vision). Мемы и явные запросы на генерацию картинок («нарисуй…», `generate image`, …) остаются на Chat Completions с `attach_image` и `reasoning_effort=none` у `gpt-6*`. `MENTION_WEB_SEARCH=false` — Completions для всех упоминаний без веба. Кулдаун `MENTION_COOLDOWN_SECONDS`.
 
 ### Автоответ на вопросы без ответа
 
-Глобальный `AUTO_ANSWER_ENABLED` + **opt-in в `/settings`** (по умолчанию выкл). Общий вопрос без reply/упоминаний/команд/ссылок на медиа ставится в очередь; если за `AUTO_ANSWER_DELAY_SECONDS` (~5 мин) люди не отреагировали, планировщик генерирует ответ с окном контекста `AUTO_ANSWER_CONTEXT_*`. Любая активность людей и редактирование вопроса отменяют ожидание. Claim lease: `AUTO_ANSWER_CLAIM_LEASE_MS`.
+Глобальный `AUTO_ANSWER_ENABLED` + **opt-in в `/settings`** (по умолчанию выкл). Общий вопрос без reply/упоминаний/команд/ссылок на медиа ставится в очередь; если за `AUTO_ANSWER_DELAY_SECONDS` (~5 мин) люди не отреагировали, планировщик всегда отвечает через Responses API — даже когда `MENTION_WEB_SEARCH=false`, поэтому прокси должен отдавать `/v1/responses`. Веб-поиск включается только при `MENTION_WEB_SEARCH=true` (инструмент есть, `tool_choice` не задаётся). Для `gpt-6*` reasoning effort `medium`. Окно контекста — `AUTO_ANSWER_CONTEXT_*` (по умолчанию 30 сообщений / 45 минут / 4000 символов). Текст вопроса по-прежнему режется отдельно до `AUTO_ANSWER_MAX_INPUT_CHARS` (1500) и не делит этот лимит с контекстом. Автоответ не ставится на реплаи, поэтому ветка обычно пустая; если у сохранённого вопроса всё же есть `reply_to_message_id`, перед вопросом добавляется блок «Ветка обсуждения» (`MENTION_THREAD_*`). Память чата передаётся в сообщение пользователя как недоверенный фон. Для `gpt-6*` лимит `AUTO_ANSWER_MAX_OUTPUT_TOKENS` включает токены рассуждения. Любая активность людей и редактирование вопроса отменяют ожидание. Claim lease: `AUTO_ANSWER_CLAIM_LEASE_MS`.
+
+### Память чата
+
+Таблица `chat_memory` (миграция `003_chat_memory.sql`): `body` — короткая заметка модели, `pinned` — факты, которые задал администратор, плюс `updated_at`, `source_until`, `last_run_on`, `claimed_until`. Планировщик тикает каждые `CHAT_MEMORY_TICK_INTERVAL_MS` и обновляет `body` только в час `CHAT_MEMORY_HOUR_MOSCOW` (по умолчанию 3:00 Europe/Moscow), не чаще одного раза за московские сутки. В промпт попадают сообщения за `CHAT_MEMORY_LOOKBACK_HOURS` (включая ответы бота). Lease как у новостей: `OPENAI_TIMEOUT_MS × (1 + OPENAI_MAX_RETRIES) + 60 с`, минимум 3 минуты. Если за окно не было сообщений людей, день помечается выполненным, а `body` и `pinned` не стираются. Пустой ответ модели не записывается и не закрывает день: lease остаётся до истечения. Модель — `OPENAI_CHAT_MEMORY_MODEL` или `OPENAI_MODEL` (Chat Completions, без инструментов; у `gpt-6*` `reasoning_effort=none`). Расход пишется в `openai_usage` с kind `chat_memory`; отдельного счётчика нет, `/usage` суммирует все токены. Непустой `ALLOWED_CHAT_IDS` оставляет только эти чаты и не проставляет `last_run_on` отфильтрованным. `/memory`, `/remember` и `/forget` доступны администраторам, даже если `CHAT_MEMORY_ENABLED=false`. Закреплённые факты и ночная заметка уходят в системный промпт упоминаний, автоответов и саммари как фон. Chat GC удаляет строку вместе с остальными данными недоступного чата. В `messages` хранится `reply_to_message_id`.
 
 ### Ежедневные новости
 
@@ -145,8 +152,9 @@ Inline-меню только для админов: саммари только 
 | Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
 | `OPENAI_ADMIN_API_KEY` | пусто | Admin API key для owner `/costs` (биллинг org); не путать с `OPENAI_API_KEY` |
-| `OPENAI_MODEL` | `gpt-6-sol` | Основная Chat Completions; для `gpt-6*` ставится `reasoning_effort=none` |
+| `OPENAI_MODEL` | `gpt-6-sol` | Основная модель. Автоответ идёт через Responses API, не Chat Completions. У `gpt-6*` Chat Completions по-прежнему `reasoning_effort=none` (саммари, gif, мемы, генерация картинок, слияние памяти) |
 | `OPENAI_NEWS_MODEL` | пусто | Модель новостей; пусто → `OPENAI_MODEL` |
+| `OPENAI_CHAT_MEMORY_MODEL` | пусто | Модель ночной памяти (Chat Completions); пусто → `OPENAI_MODEL` |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-1-mini` | Генерация картинок в @упоминаниях |
 | `OPENAI_BASE_URL` | пусто | Совместимый endpoint; для mentions/news с вебом нужен `/v1/responses` + `web_search` |
 | `OPENAI_TIMEOUT_MS` | `90000` | Таймаут SDK; для mentions/news web_search часто `120000+` |
@@ -196,18 +204,24 @@ Inline-меню только для админов: саммари только 
 | Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
 | `MENTION_ENABLED` | `true` | Глобальный gate |
-| `MENTION_MAX_INPUT_CHARS` | `1500` | Бюджет текста запроса |
-| `MENTION_MAX_OUTPUT_TOKENS` | `600` | Лимит текста ответа |
+| `MENTION_MAX_INPUT_CHARS` | `1500` | Потолок только текста запроса, не всего промпта |
+| `MENTION_MAX_OUTPUT_TOKENS` | `2500` | Лимит ответа на Responses, включая токены рассуждения `gpt-6*` |
 | `MENTION_COOLDOWN_SECONDS` | `10` | Пауза |
 | `MENTION_IMAGES_ENABLED` | `true` | Генерация картинок в ответе |
 | `MENTION_MAX_IMAGES` | `2` | Макс. картинок в ответе (0–4) |
 | `MENTION_VISION_ENABLED` | `true` | Разбор входных фото |
 | `MENTION_MAX_INPUT_IMAGES` | `4` | Сколько входных фото брать |
 | `MENTION_MAX_INPUT_IMAGE_MB` | `5` | Потолок размера входного фото |
-| `MENTION_CONTEXT_MAX_MESSAGES` | `6` | Предшествующие строки (`0` = без них) |
-| `MENTION_CONTEXT_LOOKBACK_MINUTES` | `10` | Окно по времени |
-| `MENTION_CONTEXT_MAX_CHARS` | `500` | Бюджет символов контекста |
-| `MENTION_WEB_SEARCH` | `true` | Responses + `web_search` (auto; мемы и явный image-gen — Completions) |
+| `MENTION_CONTEXT_MAX_MESSAGES` | `40` | Недавнее окно перед обращением (`0` выключает только его) |
+| `MENTION_CONTEXT_LOOKBACK_MINUTES` | `45` | Глубина недавнего окна |
+| `MENTION_CONTEXT_MAX_CHARS` | `4000` | Бюджет только недавнего окна |
+| `MENTION_QUOTE_MAX_CHARS` | `1500` | Бюджет текста цитаты |
+| `MENTION_THREAD_MAX_MESSAGES` | `8` | Длина цепочки ответов к цитате (`0` выключает запрос) |
+| `MENTION_THREAD_MAX_CHARS` | `2000` | Бюджет цепочки |
+| `MENTION_AROUND_QUOTE_MAX_MESSAGES` | `6` | Короткое окно перед цитатой (`0` выключает запрос) |
+| `MENTION_AROUND_QUOTE_LOOKBACK_MINUTES` | `10` | Глубина окна рядом с цитатой |
+| `MENTION_AROUND_QUOTE_MAX_CHARS` | `1200` | Бюджет окна рядом с цитатой |
+| `MENTION_WEB_SEARCH` | `true` | Responses + `web_search` (auto; `gpt-6*` reasoning `medium`; мемы и явный image-gen — Completions с `reasoning_effort=none`) |
 
 ### Автоответ
 
@@ -216,12 +230,12 @@ Inline-меню только для админов: саммари только 
 | `AUTO_ANSWER_ENABLED` | `true` | Глобальный gate (в чате всё равно opt-in) |
 | `AUTO_ANSWER_DELAY_SECONDS` | `300` | Ждать людей перед ответом |
 | `AUTO_ANSWER_TICK_INTERVAL_MS` | `15000` | Тик планировщика |
-| `AUTO_ANSWER_MAX_OUTPUT_TOKENS` | `600` | Лимит ответа |
+| `AUTO_ANSWER_MAX_OUTPUT_TOKENS` | `2500` | Лимит ответа на Responses, включая токены рассуждения `gpt-6*` |
 | `AUTO_ANSWER_MAX_INPUT_CHARS` | `1500` | Бюджет вопроса |
 | `AUTO_ANSWER_CLAIM_LEASE_MS` | `180000` | Lease claim’а |
-| `AUTO_ANSWER_CONTEXT_MAX_MESSAGES` | `12` | Контекст до вопроса |
-| `AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES` | `15` | Окно по времени |
-| `AUTO_ANSWER_CONTEXT_MAX_CHARS` | `2500` | Бюджет символов |
+| `AUTO_ANSWER_CONTEXT_MAX_MESSAGES` | `30` | Контекст до вопроса |
+| `AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES` | `45` | Окно по времени |
+| `AUTO_ANSWER_CONTEXT_MAX_CHARS` | `4000` | Бюджет символов контекста (вопрос режется отдельно) |
 
 ### Новости
 
@@ -234,6 +248,20 @@ Inline-меню только для админов: саммари только 
 | `NEWS_WEB_SEARCH` | `true` | Responses + `web_search` |
 | `NEWS_SEARCH_CONTEXT_SIZE` | `medium` | `low` / `medium` / `high` |
 | `NEWS_FORCE_WEB_SEARCH` | `true` | `tool_choice: required` |
+
+### Память чата
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `CHAT_MEMORY_ENABLED` | `true` | Ночной merge; `/remember` работает и при `false` |
+| `CHAT_MEMORY_TICK_INTERVAL_MS` | `60000` | Тик планировщика |
+| `CHAT_MEMORY_HOUR_MOSCOW` | `3` | Час Europe/Moscow, когда merge может идти |
+| `CHAT_MEMORY_LOOKBACK_HOURS` | `24` | Окно сообщений для merge |
+| `CHAT_MEMORY_MAX_MESSAGES` | `400` | Сколько сообщений брать |
+| `CHAT_MEMORY_MAX_INPUT_CHARS` | `12000` | Бюджет пользовательского промпта merge, включая заголовки |
+| `CHAT_MEMORY_MAX_OUTPUT_TOKENS` | `700` | Лимит ответа модели |
+| `CHAT_MEMORY_PROMPT_MAX_CHARS` | `2000` | Сколько текста `body` класть в другие промпты |
+| `CHAT_MEMORY_PIN_MAX_CHARS` | `1500` | Потолок закреплённых фактов |
 
 ### Очистка чатов (chat GC)
 
@@ -301,7 +329,7 @@ Inline-меню только для админов: саммари только 
 
 ## Данные и ограничения Telegram
 
-- Сохраняются текст/подписи участников и исходящих ответов бота на mentions/автоответы; файлы/фото/аудио/видео не анализируются (кроме явной vision-логики mentions и media-репостов).
+- Сохраняются текст/подписи участников и исходящих ответов бота на mentions/автоответы, а также `reply_to_message_id`. Раз в сутки может сохраняться короткое описание чата и закреплённые факты администратора; они уходят в OpenAI вместе с упоминаниями, автоответами и саммари. Файлы/фото/аудио/видео не анализируются (кроме явной vision-логики mentions и media-репостов). Память и факты удаляются вместе с данными чата, если чат недоступен.
 - История до добавления бота недоступна. Telegram не гарантирует доставку updates при простое &gt; 24 ч.
 - Редактирование обновляет текст, если пришёл update. Удаления в обычных группах Bot API не шлёт — удалённый текст может остаться до expiry.
 - Модель получает выбранные сообщения и имена; политики OpenAI независимы от `RETENTION_DAYS`.
@@ -350,4 +378,4 @@ npm run build
 
 CI гоняет unit-тесты, Postgres integration и сборку образа. Живые Telegram/OpenAI проверки — только с вашими ключами и оплаченным балансом.
 
-Планировщики (новости, автоответ, chat GC) не запускают перекрывающиеся тики в одном процессе. При штатной остановке бот дожидается начатых AI/media задач перед закрытием пула БД.
+Планировщики (новости, память чата, автоответ, chat GC) не запускают перекрывающиеся тики в одном процессе. При штатной остановке бот дожидается начатых AI/media задач перед закрытием пула БД.

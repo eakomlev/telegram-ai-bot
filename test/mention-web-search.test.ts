@@ -8,6 +8,7 @@ import {
   buildWebSearchTool,
   mentionShouldUseWebSearchPath,
   mentionUsesWebSearch,
+  mentionResponsesReasoningOptions,
   newsResponsesReasoningOptions,
   responseHasWebSearchCall,
 } from '../src/ai/ai.js';
@@ -52,10 +53,12 @@ test('mention Responses params include web_search and do not force tool_choice',
   assert.match(params.instructions, /веб-поиск|web search/i);
   assert.equal(params.input, 'Что сегодня по курсу доллара?');
   if (/^gpt-6/i.test(params.model)) {
-    assert.deepEqual(params.reasoning, { effort: 'low' });
+    assert.deepEqual(params.reasoning, { effort: 'medium' });
   } else {
     assert.equal('reasoning' in params, false);
   }
+  assert.deepEqual(mentionResponsesReasoningOptions('gpt-6-sol'), { reasoning: { effort: 'medium' } });
+  assert.deepEqual(mentionResponsesReasoningOptions('gpt-4.1-mini'), {});
   assert.deepEqual(newsResponsesReasoningOptions('gpt-6-sol'), { reasoning: { effort: 'low' } });
 });
 
@@ -104,13 +107,21 @@ test('assertMentionResponsesResult throws on error, incomplete, empty text', () 
     }),
     /Mention Responses API error/,
   );
-  assert.throws(
-    () => assertMentionResponsesResult({
+  assert.equal(
+    assertMentionResponsesResult({
       status: 'incomplete',
       incomplete_details: { reason: 'max_output_tokens' },
       output_text: 'partial',
     }),
-    /status is incomplete.*max_output_tokens/,
+    'partial\n\nОтвет сокращён из-за ограничения длины.',
+  );
+  assert.throws(
+    () => assertMentionResponsesResult({
+      status: 'incomplete',
+      incomplete_details: { reason: 'content_filter' },
+      output_text: 'partial',
+    }),
+    /status is incomplete.*content_filter/,
   );
   assert.throws(
     () => assertMentionResponsesResult({

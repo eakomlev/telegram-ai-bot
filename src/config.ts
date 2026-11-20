@@ -15,7 +15,11 @@ const schema = z.object({
    * Do not reuse OPENAI_API_KEY — Admin keys are separate.
    */
   OPENAI_ADMIN_API_KEY: z.string().default(''),
-  /** Default Chat Completions model (summary, mention, gif, auto-answer, …). For gpt-6* sets reasoning_effort=none. */
+  /**
+   * Default model. Auto-answer uses the Responses API, not Chat Completions.
+   * For gpt-6* Chat Completions still set reasoning_effort=none
+   * (summary, gif, memes, image-gen, chat memory merge).
+   */
   OPENAI_MODEL: z.string().min(1).default('gpt-6-sol'),
   /** Optional OpenAI-compatible base URL; empty = official API. Mentions/news with web_search need /v1/responses + hosted web_search. */
   OPENAI_BASE_URL: z.string().default(''),
@@ -141,10 +145,11 @@ const schema = z.object({
   VIDEO_CACHE_SIZE: integer(1000, 0, 10000),
   /** Global gate for @mentions / reply-to-bot (per-chat can still disable). */
   MENTION_ENABLED: bool.default('true'),
-  /** Max characters of mention request text (quote + user text + context budget). */
+  /** Cap for the USER REQUEST text only, not the whole prompt. */
   MENTION_MAX_INPUT_CHARS: integer(1500, 100, 8000),
   /** Max completion tokens for mention text replies. */
-  MENTION_MAX_OUTPUT_TOKENS: integer(600, 64, 4000),
+  /** Responses max_output_tokens for mentions. Includes gpt-6 reasoning tokens, not only the visible reply. */
+  MENTION_MAX_OUTPUT_TOKENS: integer(2500, 64, 8000),
   /** Minimum seconds between mention replies in the same chat. */
   MENTION_COOLDOWN_SECONDS: integer(10, 1, 3600),
   /** Allow the model to generate images/memes in mention replies. */
@@ -157,12 +162,24 @@ const schema = z.object({
   MENTION_MAX_INPUT_IMAGES: integer(4, 0, 8),
   /** Max size of each input photo downloaded for vision (MB). */
   MENTION_MAX_INPUT_IMAGE_MB: integer(5, 1, 20),
-  /** Preceding chat lines loaded before a mention; 0 = quote+request only. */
-  MENTION_CONTEXT_MAX_MESSAGES: integer(6, 0, 100),
-  /** How far back (minutes) to look for mention context messages. */
-  MENTION_CONTEXT_LOOKBACK_MINUTES: integer(10, 1, 1440),
-  /** Max characters of preceding context included in a mention prompt. */
-  MENTION_CONTEXT_MAX_CHARS: integer(500, 0, 50000),
+  /** Recent-window message count only (not the quote thread or the around-quote window). 0 disables that query. */
+  MENTION_CONTEXT_MAX_MESSAGES: integer(40, 0, 100),
+  /** How far back (minutes) to look for the recent mention window. */
+  MENTION_CONTEXT_LOOKBACK_MINUTES: integer(45, 1, 1440),
+  /** Max characters of the recent-window block only. */
+  MENTION_CONTEXT_MAX_CHARS: integer(4000, 0, 50000),
+  /** Max characters of the quoted message body (independent of the request cap). */
+  MENTION_QUOTE_MAX_CHARS: integer(1500, 100, 8000),
+  /** Reply-chain length loaded for a quoted message; 0 disables that query. */
+  MENTION_THREAD_MAX_MESSAGES: integer(8, 0, 100),
+  /** Max characters of the reply-chain block. */
+  MENTION_THREAD_MAX_CHARS: integer(2000, 0, 50000),
+  /** Messages loaded immediately before an older quote; 0 disables that query. */
+  MENTION_AROUND_QUOTE_MAX_MESSAGES: integer(6, 0, 100),
+  /** How far back (minutes) to look beside the quoted message. */
+  MENTION_AROUND_QUOTE_LOOKBACK_MINUTES: integer(10, 1, 1440),
+  /** Max characters of the around-quote block. */
+  MENTION_AROUND_QUOTE_MAX_CHARS: integer(1200, 0, 50000),
   /**
    * true = ordinary mention text via Responses API + hosted web_search (tool_choice auto);
    * memes and explicit image-gen requests stay on Chat Completions + attach_image.
@@ -186,6 +203,8 @@ const schema = z.object({
   NEWS_FORCE_WEB_SEARCH: bool.default('true'),
   /** Optional model for news only; empty → OPENAI_MODEL. */
   OPENAI_NEWS_MODEL: z.string().default(''),
+  /** Optional Chat Completions model for nightly chat-memory merge; empty → OPENAI_MODEL. */
+  OPENAI_CHAT_MEMORY_MODEL: z.string().default(''),
   /** Global gate for unanswered-question auto-replies; per-chat setting stays opt-in (default off). */
   AUTO_ANSWER_ENABLED: bool.default('true'),
   /** Wait this many seconds for humans before the bot answers a question. */
@@ -193,17 +212,36 @@ const schema = z.object({
   /** Auto-answer scheduler poll interval (ms). */
   AUTO_ANSWER_TICK_INTERVAL_MS: integer(15000, 1000, 600000),
   /** Max completion tokens for an auto-answer. */
-  AUTO_ANSWER_MAX_OUTPUT_TOKENS: integer(600, 64, 4000),
+  /** Responses max_output_tokens for auto-answers. Includes gpt-6 reasoning tokens, not only the visible reply. */
+  AUTO_ANSWER_MAX_OUTPUT_TOKENS: integer(2500, 64, 8000),
   /** Max characters of the question text sent to the model. */
   AUTO_ANSWER_MAX_INPUT_CHARS: integer(1500, 100, 8000),
   /** How long a claimed auto-answer job is leased before another worker may reclaim it (ms). */
   AUTO_ANSWER_CLAIM_LEASE_MS: integer(180000, 10000, 600000),
   /** Preceding chat lines loaded when firing an auto-answer; 0 = question only. */
-  AUTO_ANSWER_CONTEXT_MAX_MESSAGES: integer(12, 0, 100),
+  AUTO_ANSWER_CONTEXT_MAX_MESSAGES: integer(30, 0, 100),
   /** How far back (minutes) to look for auto-answer context. */
-  AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES: integer(15, 1, 1440),
+  AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES: integer(45, 1, 1440),
   /** Max characters of preceding context for auto-answer prompts. */
-  AUTO_ANSWER_CONTEXT_MAX_CHARS: integer(2500, 0, 50000),
+  AUTO_ANSWER_CONTEXT_MAX_CHARS: integer(4000, 0, 50000),
+  /** Global gate for the nightly chat-memory merge. Admin pin commands stay available when this is off. */
+  CHAT_MEMORY_ENABLED: bool.default('true'),
+  /** Chat-memory scheduler poll interval (ms); ticks only merge at CHAT_MEMORY_HOUR_MOSCOW. */
+  CHAT_MEMORY_TICK_INTERVAL_MS: integer(60000, 5000, 3600000),
+  /** Moscow hour (0–23) when the nightly memory merge may run. */
+  CHAT_MEMORY_HOUR_MOSCOW: integer(3, 0, 23),
+  /** How many hours of messages to fold into one memory merge. */
+  CHAT_MEMORY_LOOKBACK_HOURS: integer(24, 1, 168),
+  /** Max messages loaded for one memory merge. */
+  CHAT_MEMORY_MAX_MESSAGES: integer(400, 1, 2000),
+  /** Max characters of the memory-merge user prompt (headers included). */
+  CHAT_MEMORY_MAX_INPUT_CHARS: integer(12000, 1000, 100000),
+  /** Max completion tokens for a memory merge. */
+  CHAT_MEMORY_MAX_OUTPUT_TOKENS: integer(700, 64, 4000),
+  /** Max characters of the model memory body injected into other prompts. */
+  CHAT_MEMORY_PROMPT_MAX_CHARS: integer(2000, 0, 20000),
+  /** Max characters of admin-pinned facts (stored text and prompt block). */
+  CHAT_MEMORY_PIN_MAX_CHARS: integer(1500, 100, 8000),
   /** Global gate for periodic chat GC (probe Telegram; purge DB for gone chats). */
   CHAT_GC_ENABLED: bool.default('true'),
   /** Chat GC scheduler poll interval (ms); ticks only act at CHAT_GC_HOURS_MOSCOW. */

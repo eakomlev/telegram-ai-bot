@@ -7,15 +7,19 @@ import {
 } from '../ai/ai.js';
 import {
   formatContextLine,
+  prepareMentionContextBlocks,
   trimPrecedingContext,
-  type ChatContextMessage,
+  type ContextLine,
 } from '../chat/chat-context.js';
+import { formatChatMemoryBlock } from '../chat/chat-memory.js';
 import { resolveChatSettings } from '../chat/chat-settings.js';
 import { config } from '../config.js';
 import {
+  getChatMemory,
   persistBotMessage,
   recordOpenAiUsage,
   selectPrecedingMessages,
+  selectReplyChain,
 } from '../core/db.js';
 import { splitReply, splitCaptionReply, truncateText } from '../summary/summary.js';
 import { enqueueAi } from '../core/ai-jobs.js';
@@ -37,9 +41,13 @@ export function getBotAuthorLabel() {
   return botIdentity?.username ? `@${botIdentity.username}` : 'Бот';
 }
 
-async function persistSentBotReply(chatId: number, sent: Message | undefined) {
+async function persistSentBotReply(
+  chatId: number,
+  sent: Message | undefined,
+  replyToMessageId?: number | null,
+) {
   if (!sent) return;
-  await persistBotMessage(chatId, sent, getBotAuthorLabel()).catch(() => {
+  await persistBotMessage(chatId, sent, getBotAuthorLabel(), replyToMessageId).catch(() => {
     console.error('Bot message persist failed', { chatId, messageId: sent.message_id });
   });
 }
@@ -152,91 +160,79 @@ export function isImageGenerationRequest(text: string): boolean {
   return false;
 }
 
-/** Attach preceding chat lines in front of the main body; drop/truncate oldest first. */
-function withPrecedingContext(
-  body: string,
-  preceding: ChatContextMessage[],
-  maxChars: number,
-  contextHeader: string,
-): string {
-  if (body.length > maxChars) return truncateText(body, maxChars);
-  const contextLines = preceding
+export type MentionPromptBudgets = {
+  requestMaxChars: number;
+  quoteMaxChars: number;
+  recentMaxChars: number;
+  aroundQuoteMaxChars: number;
+  threadMaxChars: number;
+};
+
+export function mentionPromptBudgetsFromConfig(): MentionPromptBudgets {
+  return {
+    requestMaxChars: config.MENTION_MAX_INPUT_CHARS,
+    quoteMaxChars: config.MENTION_QUOTE_MAX_CHARS,
+    recentMaxChars: config.MENTION_CONTEXT_MAX_CHARS,
+    aroundQuoteMaxChars: config.MENTION_AROUND_QUOTE_MAX_CHARS,
+    threadMaxChars: config.MENTION_THREAD_MAX_CHARS,
+  };
+}
+
+function formatMentionContextBlock(header: string, messages: ContextLine[], maxChars: number): string {
+  const trimmed = trimPrecedingContext(messages, maxChars);
+  const lines = trimmed
     .map(formatContextLine)
     .filter((line) => !/^\[.+\]:\s*$/.test(line));
-  if (!contextLines.length) return body;
-
-  const separator = '\n\n';
-  const contextBudget = maxChars - contextHeader.length - separator.length - body.length;
-  if (contextBudget < 1) return body;
-
-  const selected = [...contextLines];
-  const joinedLen = () => selected.join('\n').length;
-  while (selected.length > 1 && joinedLen() > contextBudget) {
-    selected.shift();
-  }
-  if (selected.length === 0) return body;
-
-  let contextBody = selected.join('\n');
-  if (contextBody.length > contextBudget) {
-    const ellipsis = '…';
-    const keep = Math.max(0, contextBudget - ellipsis.length);
-    contextBody = `${contextBody.slice(0, keep)}${ellipsis}`;
-  }
-  if (!contextBody.trim()) return body;
-
-  const result = `${contextHeader}${contextBody}${separator}${body}`;
-  return result.length > maxChars ? truncateText(result, maxChars) : result;
+  if (!lines.length) return '';
+  return `${header}\n${lines.join('\n')}`;
 }
 
 /**
- * Prefer keeping the user request, then the quote; drop/truncate preceding first.
- * Empty preceding keeps the previous format unchanged.
+ * Request and quote are truncated on their own budgets. Context blocks never shrink them.
+ * With no quote and no context blocks, the request is returned without a header.
  */
 export function buildMentionPrompt(
   userText: string,
   quoted: { author: string; text: string } | undefined,
-  maxChars: number,
+  budgets: MentionPromptBudgets,
   hasImages = false,
-  preceding: ChatContextMessage[] = [],
+  blocks: { recent?: ContextLine[]; aroundQuote?: ContextLine[]; thread?: ContextLine[] } = {},
 ): string {
-  const request = userText.trim()
+  const requestRaw = userText.trim()
     || (quoted || hasImages ? 'Опиши и прокомментируй по делу с учётом контекста и изображений.' : '');
-  if (!request) return '';
+  const request = requestRaw ? truncateText(requestRaw, budgets.requestMaxChars) : '';
 
-  if (!quoted) {
-    const body = preceding.length ? `Запрос:\n${request}` : request;
-    const capped = body.length > maxChars ? truncateText(body, maxChars) : body;
-    // Barely room for a labeled request — skip preceding.
-    if (preceding.length && maxChars - capped.length < 20) {
-      return request.length > maxChars ? truncateText(request, maxChars) : request;
-    }
-    return withPrecedingContext(
-      capped,
-      preceding,
-      maxChars,
-      'Контекст (недавние сообщения):\n',
-    );
-  }
-
-  const header = `Цитата (${quoted.author}):\n`;
-  const footer = `\n\nЗапрос:\n${request}`;
-  const budget = maxChars - header.length - footer.length;
-  // Quote+request barely fit — omit preceding entirely (same compact path as before).
-  if (budget < 40) {
-    const requestBody = truncateText(`Запрос: ${request}`, maxChars);
-    const quoteBudget = maxChars - requestBody.length - '\n\nЦитата: '.length;
-    return quoteBudget > 0
-      ? `Цитата: ${truncateText(quoted.text, quoteBudget)}\n\n${requestBody}`
-      : requestBody;
-  }
-  const quote = quoted.text.length > budget ? truncateText(quoted.text, budget) : quoted.text;
-  const quoteAndRequest = `${header}${quote}${footer}`;
-  return withPrecedingContext(
-    quoteAndRequest,
-    preceding,
-    maxChars,
-    'Контекст (сообщения до цитаты):\n',
+  const recentBlock = formatMentionContextBlock(
+    'Контекст (недавние сообщения):',
+    blocks.recent ?? [],
+    budgets.recentMaxChars,
   );
+  const aroundBlock = formatMentionContextBlock(
+    'Контекст (рядом с цитатой):',
+    blocks.aroundQuote ?? [],
+    budgets.aroundQuoteMaxChars,
+  );
+  const threadBlock = formatMentionContextBlock(
+    'Ветка обсуждения:',
+    blocks.thread ?? [],
+    budgets.threadMaxChars,
+  );
+
+  const contextSections = [recentBlock, aroundBlock, threadBlock].filter(Boolean);
+  if (!quoted && contextSections.length === 0) return request;
+
+  const sections = [...contextSections];
+  if (quoted) {
+    const author = (quoted.author || 'Участник').replace(/\s+/g, ' ').trim() || 'Участник';
+    const quoteText = truncateText(quoted.text.trim(), budgets.quoteMaxChars);
+    if (quoteText) sections.push(`Цитата (${author}):\n${quoteText}`);
+  }
+  if (request) sections.push(`Запрос:\n${request}`);
+  return sections.join('\n\n');
+}
+
+function toContextLines(rows: { message_id: number; author: string; text: string }[]): ContextLine[] {
+  return rows.map((row) => ({ author: row.author, text: row.text, messageId: row.message_id }));
 }
 
 function claimMentionSlot(chatId: number) {
@@ -296,12 +292,8 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
   ];
 
   // Cheap empty check before cooldown/DB (without preceding).
-  const draftPrompt = buildMentionPrompt(
-    userText,
-    quoted,
-    config.MENTION_MAX_INPUT_CHARS,
-    fileIds.length > 0,
-  );
+  const budgets = mentionPromptBudgetsFromConfig();
+  const draftPrompt = buildMentionPrompt(userText, quoted, budgets, fileIds.length > 0);
   if (!draftPrompt && !fileIds.length) {
     await ctx.reply(
       'Напишите вопрос после упоминания бота, ответьте на моё сообщение, приложите картинку или ответьте цитатой на сообщение.',
@@ -324,40 +316,94 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
   const message = ctx.message;
   const chat = ctx.chat;
   const accepted = await enqueueAi(ctx, async () => {
-    let preceding: ChatContextMessage[] = [];
+    let recent: ContextLine[] = [];
     if (config.MENTION_CONTEXT_MAX_MESSAGES > 0) {
-      // With a quote, anchor before the quoted message; otherwise before the mention itself.
-      const replyTo = quoted ? message.reply_to_message : undefined;
-      const anchor = replyTo ?? message;
       try {
         const rows = await selectPrecedingMessages({
           chatId: chat.id,
-          beforeMessageId: anchor.message_id,
-          beforeSentAt: new Date(anchor.date * 1000),
-          messageThreadId: anchor.message_thread_id ?? message.message_thread_id ?? null,
+          beforeMessageId: message.message_id,
+          beforeSentAt: new Date(message.date * 1000),
+          messageThreadId: message.message_thread_id ?? null,
           lookbackMinutes: config.MENTION_CONTEXT_LOOKBACK_MINUTES,
           maxMessages: config.MENTION_CONTEXT_MAX_MESSAGES,
         });
-        preceding = trimPrecedingContext(
-          rows.map((message) => ({ author: message.author, text: message.text })),
-          config.MENTION_CONTEXT_MAX_CHARS,
-        );
+        recent = toContextLines(rows);
       } catch (error) {
         console.error('Mention context load failed', {
           chatId: chat.id,
-          messageId: anchor.message_id,
+          messageId: message.message_id,
           message: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    const prompt = buildMentionPrompt(
-      userText,
-      quoted,
-      config.MENTION_MAX_INPUT_CHARS,
-      fileIds.length > 0,
-      preceding,
-    );
+    let aroundQuote: ContextLine[] = [];
+    let thread: ContextLine[] = [];
+    const replyTo = message.reply_to_message;
+    const replyChatId = replyTo?.chat?.id;
+    const replyInThisChat = Boolean(replyTo) && (replyChatId == null || replyChatId === chat.id);
+    if (replyTo && replyInThisChat && config.MENTION_AROUND_QUOTE_MAX_MESSAGES > 0) {
+      try {
+        const rows = await selectPrecedingMessages({
+          chatId: chat.id,
+          beforeMessageId: replyTo.message_id,
+          beforeSentAt: new Date(replyTo.date * 1000),
+          messageThreadId: replyTo.message_thread_id ?? null,
+          lookbackMinutes: config.MENTION_AROUND_QUOTE_LOOKBACK_MINUTES,
+          maxMessages: config.MENTION_AROUND_QUOTE_MAX_MESSAGES,
+        });
+        aroundQuote = toContextLines(rows);
+      } catch (error) {
+        console.error('Mention around-quote context load failed', {
+          chatId: chat.id,
+          messageId: replyTo.message_id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (replyTo && replyInThisChat && config.MENTION_THREAD_MAX_MESSAGES > 0) {
+      try {
+        const rows = await selectReplyChain({
+          chatId: chat.id,
+          startMessageId: replyTo.message_id,
+          maxMessages: config.MENTION_THREAD_MAX_MESSAGES,
+        });
+        thread = toContextLines(rows);
+      } catch (error) {
+        console.error('Mention thread load failed', {
+          chatId: chat.id,
+          messageId: replyTo.message_id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const blocks = prepareMentionContextBlocks({
+      recent,
+      aroundQuote,
+      thread,
+      quoteMessageId: replyInThisChat ? replyTo?.message_id : undefined,
+      recentMaxChars: budgets.recentMaxChars,
+      aroundQuoteMaxChars: budgets.aroundQuoteMaxChars,
+      threadMaxChars: budgets.threadMaxChars,
+    });
+    const prompt = buildMentionPrompt(userText, quoted, budgets, fileIds.length > 0, blocks);
+
+    let memoryBlock = '';
+    try {
+      const memory = await getChatMemory(chat.id);
+      memoryBlock = formatChatMemoryBlock({
+        body: memory.body,
+        pinned: memory.pinned,
+        bodyMaxChars: config.CHAT_MEMORY_PROMPT_MAX_CHARS,
+        pinMaxChars: config.CHAT_MEMORY_PIN_MAX_CHARS,
+      });
+    } catch (error) {
+      console.error('Chat memory load failed', {
+        chatId: chat.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     const reply = {
       reply_parameters: { message_id: message.message_id, allow_sending_without_reply: true },
@@ -385,6 +431,7 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
         inputImages,
         memeMode,
         forceCompletions,
+        memoryBlock,
       });
       const chatId = chat.id;
       await recordOpenAiUsage(chatId, {
@@ -404,10 +451,10 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
           ...reply,
           caption: mediaText.caption,
         });
-        await persistSentBotReply(chatId, photo);
+        await persistSentBotReply(chatId, photo, message.message_id);
         for (const part of mediaText.messages) {
           const sent = await ctx.reply(part, { ...reply, ...preview });
-          await persistSentBotReply(chatId, sent);
+          await persistSentBotReply(chatId, sent, message.message_id);
         }
       } else if (result.images.length > 1) {
         const album = await ctx.replyWithMediaGroup(
@@ -418,17 +465,17 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
           })),
           reply,
         );
-        await persistSentBotReply(chatId, album[0]);
+        await persistSentBotReply(chatId, album[0], message.message_id);
         for (const part of mediaText.messages) {
           const sent = await ctx.reply(part, { ...reply, ...preview });
-          await persistSentBotReply(chatId, sent);
+          await persistSentBotReply(chatId, sent, message.message_id);
         }
       } else {
         const first = await ctx.reply(parts[0]!, { ...reply, ...preview });
-        await persistSentBotReply(chatId, first);
+        await persistSentBotReply(chatId, first, message.message_id);
         for (const part of parts.slice(1)) {
           const sent = await ctx.reply(part, { ...reply, ...preview });
-          await persistSentBotReply(chatId, sent);
+          await persistSentBotReply(chatId, sent, message.message_id);
         }
       }
       await status.clear();

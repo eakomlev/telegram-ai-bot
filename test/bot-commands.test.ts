@@ -52,5 +52,8 @@ test('group commands exclude me; owner commands are stats and costs only', () =>
   const groupCmds = GROUP_COMMANDS.map((c) => c.command);
   const ownerCmds = OWNER_PRIVATE_COMMANDS.map((c) => c.command);
   assert.equal(groupCmds.includes('me'), false);
+  assert.equal(groupCmds.includes('memory'), true);
+  assert.equal(groupCmds.includes('remember'), true);
+  assert.equal(groupCmds.includes('forget'), true);
   assert.deepEqual(ownerCmds, ['stats', 'costs']);
 });
