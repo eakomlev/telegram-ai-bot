@@ -232,6 +232,52 @@ test('chat GC probes and purges chats outside ALLOWED_CHAT_IDS', async () => {
   });
 });
 
+test('chat GC skips positive private chat ids', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const purgedIds: string[] = [];
+    const probed: number[] = [];
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+        return { rows: [{ chat_id: '12345' }, { chat_id: '-90' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string, values: unknown[] = []) => {
+        if (sql.startsWith('DELETE FROM') && values[0] != null) {
+          purgedIds.push(String(values[0]));
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => {
+        probed.push(chatId);
+        if (chatId === -90) {
+          throw grammyError(403, 'Forbidden: bot was kicked from the group chat');
+        }
+        return { id: chatId };
+      },
+    } as unknown as Api;
+
+    try {
+      await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 4, 0));
+      assert.deepEqual(probed, [-90]);
+      assert.ok(purgedIds.includes('-90'));
+      assert.ok(!purgedIds.includes('12345'));
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
+    }
+  });
+});
+
 test('chat GC purges on deactivated group and PEER_ID_INVALID', async () => {
   await withGcTestEnv(async () => {
     const originalQuery = pool.query;
