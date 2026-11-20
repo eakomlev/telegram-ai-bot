@@ -4,6 +4,7 @@ import type { Api } from 'grammy';
 import { GrammyError } from 'grammy';
 import {
   isChatGcHourDue,
+  runChatGcNow,
   runChatGcSchedulerTick,
   stopChatGcScheduler,
 } from '../src/chat/chat-gc-scheduler.js';
@@ -48,6 +49,93 @@ test('isChatGcHourDue respects configured Moscow hours', () => {
   assert.equal(isChatGcHourDue(zonedMoscowTime(2024, 6, 1, 16, 30), hours), true);
   assert.equal(isChatGcHourDue(zonedMoscowTime(2024, 6, 1, 5, 0), hours), false);
   assert.equal(isChatGcHourDue(zonedMoscowTime(2024, 6, 1, 3, 59), hours), false);
+});
+
+test('owner chat check runs outside the scheduled hour and closes that hour slot', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const purgedIds: string[] = [];
+    const probed: number[] = [];
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
+        return { rows: [{ chat_id: '-5' }, { chat_id: '-6' }, { chat_id: '42' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string, values: unknown[] = []) => {
+        if (sql.startsWith('DELETE FROM') && values[0] != null) purgedIds.push(String(values[0]));
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => {
+        probed.push(chatId);
+        if (chatId === -5) throw grammyError(403, 'Forbidden: bot was kicked from the group chat');
+        return { id: chatId };
+      },
+    } as unknown as Api;
+
+    try {
+      const outside = await runChatGcNow(api, zonedMoscowTime(2024, 6, 1, 5, 0));
+      assert.equal(typeof outside, 'object');
+      if (typeof outside !== 'object') return;
+      assert.deepEqual(probed, [-5, -6]);
+      assert.equal(outside.candidates, 2);
+      assert.equal(outside.alive, 1);
+      assert.deepEqual(outside.purged, [{ chatId: -5, kind: 'gone' }]);
+      assert.ok(purgedIds.includes('-5'));
+
+      probed.length = 0;
+      const duringSlot = await runChatGcNow(api, zonedMoscowTime(2024, 6, 1, 4, 0));
+      assert.equal(typeof duringSlot, 'object');
+      assert.deepEqual(probed, [-5, -6]);
+
+      probed.length = 0;
+      await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 4, 30));
+      assert.deepEqual(probed, []);
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
+    }
+  });
+});
+
+test('owner chat check refuses when disabled and while a pass is running', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    config.CHAT_GC_ENABLED = 'false';
+    pool.query = (async () => {
+      throw new Error('should not list chats');
+    }) as typeof pool.query;
+    try {
+      assert.equal(await runChatGcNow({} as Api, zonedMoscowTime(2024, 6, 1, 4, 0)), 'disabled');
+    } finally {
+      pool.query = originalQuery;
+    }
+
+    config.CHAT_GC_ENABLED = 'true';
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    pool.query = (async () => {
+      await gate;
+      return { rows: [] };
+    }) as typeof pool.query;
+    const now = zonedMoscowTime(2024, 6, 1, 4, 0);
+    try {
+      const running = runChatGcSchedulerTick({} as Api, now);
+      assert.equal(await runChatGcNow({} as Api, now), 'busy');
+      release();
+      await running;
+    } finally {
+      pool.query = originalQuery;
+    }
+  });
 });
 
 test('chat GC skips when disabled or outside Moscow GC hours', async () => {
