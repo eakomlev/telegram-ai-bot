@@ -19,7 +19,6 @@ export const GROUP_COMMANDS: BotCommandDef[] = [
   { command: 'summary', description: 'Саммари: N, 24h или 7d' },
   { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
   { command: 'gif', description: 'Шуточная GIF по последним сообщениям' },
-  { command: 'me', description: 'Моя характеристика в этом чате' },
   { command: 'settings', description: 'Настройки группы (админы)' },
   { command: 'usage', description: 'Токены OpenAI по группе (админы)' },
   { command: 'help', description: 'Как пользоваться ботом' },
@@ -30,8 +29,6 @@ export const GROUP_COMMANDS: BotCommandDef[] = [
 export const OWNER_PRIVATE_COMMANDS: BotCommandDef[] = [
   { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
   { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
-  { command: 'personalize', description: 'Выбор группы и запуск персонализации' },
-  { command: 'personalize_results', description: 'Просмотр характеристик участников' },
 ];
 
 /**

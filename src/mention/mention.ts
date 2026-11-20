@@ -13,46 +13,13 @@ import {
 import { resolveChatSettings } from '../chat/chat-settings.js';
 import { config } from '../config.js';
 import {
-  getChatParticipant,
-  getLatestMemberCount,
   persistBotMessage,
   recordOpenAiUsage,
   selectPrecedingMessages,
 } from '../core/db.js';
-import { isChatMemberCountEligible } from '../personalization/personalization.js';
 import { splitReply, splitCaptionReply, truncateText } from '../summary/summary.js';
 import { enqueueAi } from '../core/ai-jobs.js';
 import { startStatus } from '../core/status.js';
-
-/** Pure gate for reply-time characteristic injection (fail closed on unknown member count). */
-export function pickInjectedCharacteristic(params: {
-  globalEnabled: boolean;
-  chatEnabled: boolean;
-  memberCount: number | undefined | null;
-  characteristic: string | null | undefined;
-}): string | undefined {
-  if (!params.globalEnabled || !params.chatEnabled) return;
-  if (!isChatMemberCountEligible(params.memberCount)) return;
-  const text = params.characteristic?.trim();
-  return text || undefined;
-}
-
-/** Load interlocutor characteristic when personalization is on and chat is small enough. */
-export async function resolveInterlocutorCharacteristic(
-  chatId: number,
-  userId: number | undefined,
-  personalizationEnabled: boolean,
-): Promise<string | undefined> {
-  if (userId == null) return;
-  const memberCount = await getLatestMemberCount(chatId);
-  const participant = await getChatParticipant(chatId, userId);
-  return pickInjectedCharacteristic({
-    globalEnabled: config.PERSONALIZATION_ENABLED === 'true',
-    chatEnabled: personalizationEnabled,
-    memberCount,
-    characteristic: participant?.characteristic,
-  });
-}
 
 let botIdentity: { id: number; username: string } | undefined;
 const recentMentions = new Map<number, number>();
@@ -408,11 +375,6 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
           : '⏳ Думаю…';
     const status = await startStatus(ctx, statusText, reply);
     try {
-      const interlocutorCharacteristic = await resolveInterlocutorCharacteristic(
-        chat.id,
-        message.from?.id,
-        settings.personalizationEnabled,
-      ).catch(() => undefined);
       const inputImages = await downloadTelegramImages(ctx.api, fileIds);
       const result = await replyToMention(prompt || 'Опиши и прокомментируй изображение(я).', {
         sarcasmLevel: settings.sarcasmLevel,
@@ -423,7 +385,6 @@ export async function maybeHandleMention(ctx: Context): Promise<boolean> {
         inputImages,
         memeMode,
         forceCompletions,
-        interlocutorCharacteristic,
       });
       const chatId = chat.id;
       await recordOpenAiUsage(chatId, {

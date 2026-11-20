@@ -50,7 +50,6 @@ test('sanitizeResponseTone falls back to gentleman', () => {
 test('defaults and format mention admin-only controls', () => {
   const settings = defaultChatSettings();
   assert.equal(settings.autoAnswerEnabled, false);
-  assert.equal(settings.personalizationEnabled, true);
   assert.equal(settings.responseTone, 'gentleman');
   const text = formatSettings(settings);
   assert.match(text, /Саммари только админам/);
@@ -58,7 +57,7 @@ test('defaults and format mention admin-only controls', () => {
   assert.match(text, /Сарказм:/);
   assert.match(text, /Тон ответа: Джентльмен/);
   assert.match(text, /Автоответ на вопросы без ответа: выкл/);
-  assert.match(text, /Персонализация участников: вкл/);
+  assert.doesNotMatch(text, /Персонализация/);
   assert.match(text, /Ежедневная новость: выкл/);
   assert.match(text, /Сферы новостей: не выбраны/);
   assert.match(text, new RegExp(String(settings.defaultMessageCount)));
@@ -121,22 +120,6 @@ test('mention and auto-answer prompts respect response tone', () => {
   assert.doesNotMatch(buildAutoAnswerSystemPrompt(0, 'gentleman'), /Тон ответа —/);
   assert.match(buildAutoAnswerSystemPrompt(0, 'pacanchik'), /пацанчик/);
   assert.match(buildAutoAnswerSystemPrompt(0, 'derzkiy'), /дерзкий/);
-});
-
-test('mention and auto-answer prompts include interlocutor characteristic when present', () => {
-  const characteristic = 'Любит краткие ответы и мемы про работу.';
-  const mention = buildMentionSystemPrompt(0, true, 2, false, false, 'gentleman', characteristic);
-  assert.match(mention, /Характеристика собеседника/);
-  assert.match(mention, /Любит краткие ответы/);
-  assert.doesNotMatch(
-    buildMentionSystemPrompt(0, true, 2, false, false, 'gentleman'),
-    /Характеристика собеседника/,
-  );
-
-  const auto = buildAutoAnswerSystemPrompt(0, 'gentleman', characteristic);
-  assert.match(auto, /Характеристика собеседника/);
-  assert.match(auto, /Любит краткие ответы/);
-  assert.doesNotMatch(buildAutoAnswerSystemPrompt(0, 'gentleman'), /Характеристика собеседника/);
 });
 
 test('gif reaction prompt respects response tone', () => {

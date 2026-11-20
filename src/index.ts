@@ -15,7 +15,6 @@ import {
   listChatStatsForOwner,
   sumNewChatMembersSince,
   recordOpenAiUsage,
-  upsertChatParticipant,
 } from './core/db.js';
 import { migrate } from './core/migrate.js';
 import { summarize, type SummaryStyle } from './ai/ai.js';
@@ -43,24 +42,6 @@ import { maybeRepostVideo } from './media/video.js';
 import { maybeRepostGallery } from './media/gallery.js';
 import { stopMediaJobs } from './core/media-jobs.js';
 import { startNewsScheduler, stopNewsScheduler } from './news/news-scheduler.js';
-import {
-  getManualPersonalizationChatBlockReason,
-  parsePersonalizeChatIdArg,
-  PERSONALIZE_USAGE,
-  startPersonalizationScheduler,
-  stopPersonalizationScheduler,
-} from './personalization/personalization-scheduler.js';
-import {
-  handlePersonalizeCallback,
-  replyWithPersonalizePicker,
-  startManualPersonalizationRun,
-} from './personalization/personalize-ui.js';
-import {
-  handlePersonalizeResultsCallback,
-  OWNER_UNSET_TEXT,
-  replyWithPersonalizeResultsPicker,
-} from './personalization/personalize-results-ui.js';
-import { handleMeCommand } from './personalization/me.js';
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 let cleanupTimer: NodeJS.Timeout | undefined;
@@ -75,7 +56,6 @@ const help = `Я сохраняю текстовые сообщения и по�
 /verse 24h — стихотворное саммари за сутки
 /gif — по последним сообщениям подобрать шуточную GIF-реакцию
 /gif 40 — то же по 40 сообщениям (можно 24h / 7d)
-/me — твоя характеристика в этом чате (если уже сохранена)
 /settings — настройки группы (только администраторы)
 /usage — токены по группе за текущий месяц (админы)
 /privacy — обработка данных
@@ -84,8 +64,6 @@ const help = `Я сохраняю текстовые сообщения и по�
 В /settings можно включить ежедневную интересную новость (случайное время 10:00–21:00 по Москве) по выбранным сферам.
 
 Там же можно включить автоответ на вопросы без ответа: если общий вопрос в чат (без @упоминаний и без ответа-цитаты) останется без реакции участников ~5 минут, бот мягко ответит (с коротким окном недавних сообщений до вопроса как контекстом).
-
-Персонализация участников по умолчанию включена для небольших чатов (меньше 20 участников): раз в сутки бот анализирует переписку и учитывает короткие внутренние характеристики в ответах на @упоминания и в автоответах. В чатах на 20+ участников персонализация не работает. Свою сохранённую характеристику можно посмотреть командой /me.
 
 Упомяните меня (@бот) в сообщении или ответьте на моё сообщение — отвечу. Текст из сообщения и из цитаты учитываю как контекст, плюс короткое окно недавних сообщений до запроса/цитаты.
 
@@ -100,7 +78,6 @@ const joinWelcome = `Привет! Я в чате.
 • упомяните меня (@бот) или ответьте на моё сообщение — отвечу;
 • киньте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — скачаю видео;
 • /gif — шуточная GIF по недавним сообщениям;
-• /me — твоя характеристика в этом чате (если уже есть);
 • /summary и /verse — саммари переписки (иногда только для админов — смотрите настройки чата).
 
 Историю до моего появления в чате я не вижу.
@@ -125,7 +102,7 @@ async function chatTitleOrId(chatId: number) {
 bot.use(async (ctx, next) => {
   if (stopping) return;
   if (ctx.chat?.type === 'private') {
-    // Callbacks have no message text; pass through so pers:/set: handlers can run.
+    // Callbacks have no message text; pass through so set: handlers can run.
     // Auth stays in the callback handlers (owner / admin checks).
     const messageText = ctx.message?.text ?? '';
     const isOwner = isBotOwner(ctx);
@@ -229,56 +206,12 @@ bot.command('stats', async (ctx) => {
     await ctx.reply(part, { link_preview_options: { is_disabled: true } });
   }
 });
-bot.command('personalize', async (ctx) => {
-  if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
-  if (!ownerUserId) {
-    await ctx.reply('Задайте OWNER_USER_ID в .env и перезапустите бота.');
-    return;
-  }
-  if (config.PERSONALIZATION_ENABLED !== 'true') {
-    await ctx.reply('Персонализация выключена глобально (PERSONALIZATION_ENABLED).');
-    return;
-  }
-  const raw = typeof ctx.match === 'string' ? ctx.match : '';
-  const parsed = parsePersonalizeChatIdArg(raw);
-  if (parsed === null) {
-    await ctx.reply(PERSONALIZE_USAGE);
-    return;
-  }
-  if (parsed === undefined) {
-    await replyWithPersonalizePicker(ctx, bot.api);
-    return;
-  }
-  const blockReason = await getManualPersonalizationChatBlockReason(parsed);
-  if (blockReason) {
-    await ctx.reply(blockReason);
-    return;
-  }
-  await startManualPersonalizationRun(ctx, bot.api, [parsed]);
-});
-
-async function handlePersonalizeResultsCommand(ctx: Context) {
-  if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
-  if (!ownerUserId) {
-    await ctx.reply(OWNER_UNSET_TEXT);
-    return;
-  }
-  await replyWithPersonalizeResultsPicker(ctx, bot.api);
-}
-
-bot.command('personalize_results', (ctx) => handlePersonalizeResultsCommand(ctx));
-// Hyphen alias (not a BotFather command); private-gate also accepts it.
-bot.hears(/^\/personalize-results(?:@\w+)?(?:\s|$)/i, (ctx) =>
-  handlePersonalizeResultsCommand(ctx),
-);
-bot.command('me', (ctx) => handleMeCommand(ctx));
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст и подписи участников, а также текст и подписи исходящих ответов бота на @упоминания и автоответы (сами изображения не сохраняются; не саммари, стихи, GIF, новости и служебные сообщения), ` +
   `отображаемое имя автора, ID пользователя (для обычных аккаунтов), время, ID сообщений и (для тем форума) ID темы в Postgres на ${config.RETENTION_DAYS} дней. ` +
   `Учёт токенов и оценочных расходов OpenAI, а также ежедневные снимки числа участников групп, хранятся ${config.USAGE_RETENTION_DAYS} дней. ` +
-  'При /summary, /gif, ежедневных новостях, @упоминаниях, (если включено в /settings) автоответах на вопросы без ответа и при ежедневной персонализации участников данные уходят в OpenAI API; ' +
+  'При /summary, /gif, ежедневных новостях, @упоминаниях и (если включено в /settings) автоответах на вопросы без ответа данные уходят в OpenAI API; ' +
   'для автоответа и @упоминаний модель также может получить небольшое окно недавних сообщений до вопроса/запроса (включая ранее сохранённые текст и подписи ответов бота; та же тема форума или чат целиком). ' +
-  'Персонализация (по умолчанию вкл. в /settings; только чаты меньше 20 участников): раз в сутки бот анализирует недавнюю переписку и сохраняет внутренние характеристики участников для более уместных ответов на @упоминания и автоответы; участник может посмотреть свою характеристику в группе командой /me. ' +
   'Ответы /summary, /verse, /gif и новости в историю переписки для контекста не сохраняются. ' +
   'Для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
   'Ссылки на видео передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
@@ -286,9 +219,6 @@ bot.command('privacy', (ctx) => ctx.reply(
 ));
 
 bot.on('callback_query:data', async (ctx) => {
-  // Prefixes are disjoint: pres: (results) vs pers: (run) vs set: (settings).
-  if (await handlePersonalizeResultsCallback(ctx, bot.api)) return;
-  if (await handlePersonalizeCallback(ctx, bot.api)) return;
   if (await handleSettingsCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
@@ -425,16 +355,6 @@ async function store(ctx: Context) {
     await ensureChatSettingsDefaults(message.chat.id).catch(() =>
       console.error('Ensure chat settings failed', { chatId: message.chat.id }),
     );
-    await upsertChatParticipant({
-      chatId: message.chat.id,
-      userId: authorUserId,
-      username: message.from?.username ?? null,
-      displayName,
-      seenAt: sentAt,
-    }).catch(() => console.error('Chat participant upsert failed', {
-      chatId: message.chat.id,
-      userId: authorUserId,
-    }));
   }
   if (ctx.message) {
     if (await maybeHandleMention(ctx)) return;
@@ -453,7 +373,6 @@ async function shutdown() {
   const draining = Promise.allSettled([
     stopNewsScheduler(),
     stopAutoAnswerScheduler(),
-    stopPersonalizationScheduler(),
     stopChatGcScheduler(),
     aiJobs.stop(),
     stopMediaJobs(),
@@ -481,7 +400,6 @@ try {
   if (!me.username) throw new Error('Bot username is required for @mentions');
   setBotIdentity(me.id, me.username);
   startAutoAnswerScheduler(bot.api);
-  startPersonalizationScheduler(bot.api);
   startChatGcScheduler(bot.api);
   for (const step of buildCommandRegistrationPlan(ownerUserId)) {
     if (step.action === 'delete') {

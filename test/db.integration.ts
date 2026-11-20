@@ -19,7 +19,6 @@ try {
 
   const expectedTables = [
     'chat_member_snapshots',
-    'chat_participants',
     'chat_settings',
     'messages',
     'openai_usage',
@@ -36,16 +35,23 @@ try {
     [expectedTables],
   );
   assert.deepEqual(tables.rows.map((r) => r.relname).sort(), expectedTables);
+  const absent = await pool.query<{ relname: string }>(
+    `SELECT relname FROM pg_class
+     WHERE relkind = 'r'
+       AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+       AND relname = 'chat_participants'`,
+  );
+  assert.equal(absent.rows.length, 0);
   const applied = await pool.query<{ id: string }>(
     'SELECT id FROM schema_migrations ORDER BY id',
   );
-  assert.deepEqual(applied.rows.map((r) => r.id), ['001_baseline']);
+  assert.deepEqual(applied.rows.map((r) => r.id), ['001_baseline', '002_drop_personalization']);
 
   await migrate();
   const appliedAgain = await pool.query<{ id: string }>(
     'SELECT id FROM schema_migrations ORDER BY id',
   );
-  assert.deepEqual(appliedAgain.rows.map((r) => r.id), ['001_baseline']);
+  assert.deepEqual(appliedAgain.rows.map((r) => r.id), ['001_baseline', '002_drop_personalization']);
 
   await pool.query('DELETE FROM messages WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);
   await pool.query('DELETE FROM summary_requests WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);

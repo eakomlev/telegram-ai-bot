@@ -11,8 +11,6 @@ services:
       PGUSER: ${POSTGRES_USER:-bot}
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       PGDATABASE: ${POSTGRES_DB:-telegram_bot}
-    volumes:
-      - personalization_data:/app/data/personalization
     depends_on:
       postgres:
         condition: service_healthy
@@ -33,4 +31,3 @@ services:
       retries: 10
 volumes:
   postgres_data:
-  personalization_data:

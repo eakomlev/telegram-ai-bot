@@ -32,6 +32,5 @@ RUN --mount=type=secret,id=npm_ca \
       "gallery-dl${GALLERY_DL_VERSION:+==${GALLERY_DL_VERSION}}" \
     && rm -rf /var/lib/apt/lists/* /tmp/build-ca.pem
 COPY --from=build --chown=node:node /runtime ./
-RUN mkdir -p /app/data/personalization && chown -R node:node /app/data
 USER node
 CMD ["node", "dist/index.js"]

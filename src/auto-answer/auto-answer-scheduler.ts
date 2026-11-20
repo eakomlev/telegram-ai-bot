@@ -18,7 +18,7 @@ import {
   selectPrecedingMessages,
   type PendingAutoAnswer,
 } from '../core/db.js';
-import { getBotAuthorLabel, resolveInterlocutorCharacteristic } from '../mention/mention.js';
+import { getBotAuthorLabel } from '../mention/mention.js';
 import { isPermanentTelegramDeliveryError } from '../chat/telegram-errors.js';
 
 let autoAnswerTimer: NodeJS.Timeout | undefined;
@@ -85,17 +85,11 @@ async function ensureAnswerText(
   lease: Date,
   sarcasmLevel: number,
   responseTone: ResponseTone,
-  personalizationEnabled: boolean,
 ): Promise<string | undefined> {
   // Send retry: answer_text already set — skip OpenAI and context reload.
   if (!needsOpenAiGeneration(row.answerText)) return row.answerText!.trim();
 
   const contextMessages = await loadAutoAnswerContext(row);
-  const interlocutorCharacteristic = await resolveInterlocutorCharacteristic(
-    row.chatId,
-    row.askerUserId ?? undefined,
-    personalizationEnabled,
-  ).catch(() => undefined);
 
   let text: string;
   let usage: Awaited<ReturnType<typeof replyToUnansweredQuestion>>['usage'];
@@ -106,7 +100,6 @@ async function ensureAnswerText(
       sarcasmLevel,
       contextMessages,
       responseTone,
-      interlocutorCharacteristic,
     ));
   } catch (error) {
     console.error('Auto-answer OpenAI failed', {
@@ -147,7 +140,6 @@ async function postAutoAnswer(api: Api, row: PendingAutoAnswer) {
     lease,
     settings.sarcasmLevel,
     settings.responseTone,
-    settings.personalizationEnabled,
   );
   if (!answer) return;
 

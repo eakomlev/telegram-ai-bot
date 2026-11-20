@@ -15,7 +15,7 @@ import { config } from '../src/config.js';
 import { isImageGenerationRequest, isMemeRequest } from '../src/mention/mention.js';
 
 test('mention system prompt includes soft search rules only when webSearch: true', () => {
-  const withSearch = buildMentionSystemPrompt(0, false, 0, false, false, 'gentleman', null, {
+  const withSearch = buildMentionSystemPrompt(0, false, 0, false, false, 'gentleman', {
     webSearch: true,
   });
   assert.match(withSearch, /веб-поиск|web search/i);
@@ -23,7 +23,7 @@ test('mention system prompt includes soft search rules only when webSearch: true
   assert.match(withSearch, /не больше одной реальной ссылки|одной реальной ссылки/i);
   assert.match(withSearch, /шуток|мемов|обычного общения/i);
 
-  const without = buildMentionSystemPrompt(0, false, 0, false, false, 'gentleman', null, {
+  const without = buildMentionSystemPrompt(0, false, 0, false, false, 'gentleman', {
     webSearch: false,
   });
   assert.doesNotMatch(without, /веб-поиск|web search/i);
@@ -36,7 +36,7 @@ test('default mention system prompt (no options) does not mandate web search', (
 });
 
 test('meme prompt ignores webSearch option (no search rules)', () => {
-  const meme = buildMentionSystemPrompt(0, true, 2, false, true, 'gentleman', null, {
+  const meme = buildMentionSystemPrompt(0, true, 2, false, true, 'gentleman', {
     webSearch: true,
   });
   assert.doesNotMatch(meme, /веб-поиск|web search/i);
