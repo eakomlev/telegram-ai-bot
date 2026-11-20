@@ -23,6 +23,7 @@ import { parseSelection, prepareMessages, splitReply } from './summary/summary.j
 import { forgetChatFact, rememberChatFact, replyWithChatMemory } from './chat/chat-memory-commands.js';
 import { startChatMemoryScheduler, stopChatMemoryScheduler } from './chat/chat-memory-scheduler.js';
 import { handleMemoryRefreshCallback, replyWithMemoryRefreshPicker } from './chat/chat-memory-refresh-ui.js';
+import { handleChatCheckCallback, replyWithChatCheckConfirm } from './chat/chat-gc-ui.js';
 import { formatChatMemoryBlock } from './chat/chat-memory.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
 import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
@@ -189,6 +190,7 @@ bot.command('costs', async (ctx) => {
   }
 });
 bot.command('memory_refresh', (ctx) => replyWithMemoryRefreshPicker(ctx));
+bot.command('check_chats', (ctx) => replyWithChatCheckConfirm(ctx));
 bot.command('stats', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
   if (!ownerUserId) {
@@ -236,6 +238,7 @@ bot.command('privacy', (ctx) => ctx.reply(
 bot.on('callback_query:data', async (ctx) => {
   if (await handleSettingsCallback(ctx)) return;
   if (await handleMemoryRefreshCallback(ctx)) return;
+  if (await handleChatCheckCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
 

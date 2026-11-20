@@ -37,7 +37,7 @@ src/
   config.ts                # Zod + env
   core/                    # db, migrate.ts + migrations/, очереди AI/media, process, status, moscow-time
   ai/                      # OpenAI-вызовы, usage/$, openai-costs (Admin API /costs + usage tokens)
-  chat/                    # настройки, контекст, chat-memory.ts, chat-memory-scheduler.ts, chat-memory-commands.ts, chat-memory-refresh-ui.ts, снимки участников, chat GC
+  chat/                    # настройки, контекст, память чата, снимки участников, chat GC и /check_chats
   summary/                 # выборка и нарезка текста для саммари
   mention/                 # @упоминания и reply-to-bot
   auto-answer/             # очередь и планировщик автоответов
@@ -64,11 +64,12 @@ src/
 | `/stats` | Рост чатов/участников за месяц (МСК) и токены по чатам — только в личке у `OWNER_USER_ID` |
 | `/costs` | Официальные расходы и токены completions организации OpenAI за текущий месяц (МСК, MTD) — только в личке у `OWNER_USER_ID`; нужен `OPENAI_ADMIN_API_KEY` |
 | `/memory_refresh` | Выбор группы и пересчёт памяти по сообщениям за последние 3 дня — только в личке у `OWNER_USER_ID` |
+| `/check_chats` | Проверка всех известных групп и удаление данных недоступных — только в личке у `OWNER_USER_ID` |
 | `/help` / `/start` | Справка |
 | `/privacy` | Что сохраняется и куда уходит |
 | `/chatid` | ID группы для `ALLOWED_CHAT_IDS` |
 
-По умолчанию саммари/стихи/GIF доступны только администраторам (`SUMMARY_ADMIN_ONLY` / настройка чата). Для анонимного админа запрос нужно отправить от личного аккаунта. В личке бот просит добавить его в чат/группу; у владельца в DM работают `/stats`, `/costs` и `/memory_refresh`. Меню команд в Telegram показывает эти три только для `OWNER_USER_ID` (scope `chat` на личный чат владельца; `all_private_chats` пустой, чтобы остальные DM не видели команды).
+По умолчанию саммари/стихи/GIF доступны только администраторам (`SUMMARY_ADMIN_ONLY` / настройка чата). Для анонимного админа запрос нужно отправить от личного аккаунта. В личке бот просит добавить его в чат/группу; у владельца в DM работают `/stats`, `/costs`, `/memory_refresh` и `/check_chats`. Меню команд в Telegram показывает эти четыре только для `OWNER_USER_ID` (scope `chat` на личный чат владельца; `all_private_chats` пустой, чтобы остальные DM не видели команды).
 
 ## Как устроены подсистемы
 
@@ -102,7 +103,7 @@ src/
 
 ### Очистка недоступных чатов (chat GC)
 
-Глобальный `CHAT_GC_ENABLED`. Планировщик тикает каждые `CHAT_GC_TICK_INTERVAL_MS`, но реально работает только в часы МСК из `CHAT_GC_HOURS_MOSCOW` (по умолчанию `4,16` ≈ 2 раза в сутки). GC зондирует **все** известные групповые `chat_id` (отрицательные) и **игнорирует** `ALLOWED_CHAT_IDS` (allowlist — только gate для действий вроде новостей, не для очистки сирот); положительные private id не зондируются и не чистятся. Для каждого id вызывается `getChat`; при постоянной ошибке Telegram (403 / chat not found / kicked / not a member / deactivated / peer_id_invalid) удаляются связанные строки в БД. Upgrade group→supergroup **чистит старый id** (сообщество живёт под новым id как отдельный чат; remap истории нет). `video_cache` не трогается. При 429 или ошибке purge слот не помечается выполненным (повтор на следующем тике). Пауза между зондами: `CHAT_GC_PROBE_DELAY_MS`.
+Глобальный `CHAT_GC_ENABLED`. Планировщик тикает каждые `CHAT_GC_TICK_INTERVAL_MS`, но реально работает только в часы МСК из `CHAT_GC_HOURS_MOSCOW` (по умолчанию `4,16` ≈ 2 раза в сутки). GC зондирует **все** известные групповые `chat_id` (отрицательные) и **игнорирует** `ALLOWED_CHAT_IDS` (allowlist — только gate для действий вроде новостей, не для очистки сирот); положительные private id не зондируются и не чистятся. Для каждого id вызывается `getChat`; при постоянной ошибке Telegram (403 / chat not found / kicked / not a member / deactivated / peer_id_invalid) удаляются связанные строки в БД. Upgrade group→supergroup **чистит старый id** (сообщество живёт под новым id как отдельный чат; remap истории нет). `video_cache` не трогается. При 429 или ошибке purge слот не помечается выполненным (повтор на следующем тике). Пауза между зондами: `CHAT_GC_PROBE_DELAY_MS`. Владелец в личке запускает ту же проверку командой `/check_chats` в любой час: сначала подтверждение, затем итог (сколько групп на месте, какие id удалены). Успешный ручной проход закрывает слот текущего часа МСК, чтобы планировщик не повторил его сразу. Пока `CHAT_GC_ENABLED=false`, команда не стартует.
 
 ### Видео
 
@@ -145,7 +146,7 @@ Inline-меню только для админов: саммари только 
 | `OPENAI_API_KEY` | — | Ключ OpenAI |
 | `POSTGRES_PASSWORD` | — | Пароль Postgres в Compose |
 | `ALLOWED_CHAT_IDS` | пусто | CSV отрицательных group id; пусто — все группы (только для доверенного использования) |
-| `OWNER_USER_ID` | пусто | Telegram user id владельца для `/stats`, `/costs` и `/memory_refresh` |
+| `OWNER_USER_ID` | пусто | Telegram user id владельца для `/stats`, `/costs`, `/memory_refresh` и `/check_chats` |
 | `SUMMARY_ADMIN_ONLY` | `true` | Дефолт «саммари только админам» для новых чатов |
 
 ### OpenAI

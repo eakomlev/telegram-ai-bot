@@ -10,6 +10,20 @@ let runningTick: Promise<void> | undefined;
 /** Last successfully finished `(moscowDate, hour)` slot; skipped on later ticks in the same hour. */
 let lastCompletedSlot: string | undefined;
 
+export type ChatGcPurgeKind = 'gone' | 'upgrade';
+
+export type ChatGcReport = {
+  candidates: number;
+  checked: number;
+  alive: number;
+  purged: Array<{ chatId: number; kind: ChatGcPurgeKind }>;
+  probeErrors: number[];
+  purgeErrors: number[];
+  rateLimited: boolean;
+};
+
+export type ChatGcManualResult = ChatGcReport | 'busy' | 'disabled';
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -34,29 +48,36 @@ export function runChatGcSchedulerTick(api: Api, now = new Date()): Promise<void
   return job;
 }
 
-async function runTick(api: Api, now: Date) {
-  if (config.CHAT_GC_ENABLED !== 'true') return;
-  if (!isChatGcHourDue(now)) return;
+function passCompleted(report: ChatGcReport): boolean {
+  return !report.rateLimited && report.purgeErrors.length === 0;
+}
 
-  const slot = slotKey(now);
-  if (lastCompletedSlot === slot) return;
-
-  // Probe all known ids (ignore ALLOWED_CHAT_IDS). Skip positive private-chat ids.
+/** Probe every known group. Positive private ids are skipped. Allowlist is ignored. */
+export async function probeKnownChats(api: Api): Promise<ChatGcReport> {
   let chatIds = await listKnownChatIds();
   chatIds = chatIds.filter((id) => id < 0);
+  const report: ChatGcReport = {
+    candidates: chatIds.length,
+    checked: 0,
+    alive: 0,
+    purged: [],
+    probeErrors: [],
+    purgeErrors: [],
+    rateLimited: false,
+  };
 
-  let abortedByRateLimit = false;
-  let purgeFailed = false;
   for (const chatId of chatIds) {
+    report.checked += 1;
     try {
       await api.getChat(chatId);
+      report.alive += 1;
     } catch (error) {
       if (error instanceof GrammyError && error.error_code === 429) {
         console.error('Chat GC rate limited; aborting remaining probes', {
           chatId,
           message: error.description,
         });
-        abortedByRateLimit = true;
+        report.rateLimited = true;
         break;
       }
       const upgrade = isChatUpgradeError(error);
@@ -77,14 +98,16 @@ async function runTick(api: Api, now: Date) {
         }
         try {
           await purgeChatData(chatId);
+          report.purged.push({ chatId, kind: upgrade ? 'upgrade' : 'gone' });
         } catch (purgeError) {
-          purgeFailed = true;
+          report.purgeErrors.push(chatId);
           console.error('Chat GC purge failed', {
             chatId,
             message: purgeError instanceof Error ? purgeError.message : String(purgeError),
           });
         }
       } else {
+        report.probeErrors.push(chatId);
         console.error('Chat GC probe failed', {
           chatId,
           message: error instanceof Error ? error.message : String(error),
@@ -96,10 +119,35 @@ async function runTick(api: Api, now: Date) {
     }
   }
 
+  return report;
+}
+
+async function runTick(api: Api, now: Date) {
+  if (config.CHAT_GC_ENABLED !== 'true') return;
+  if (!isChatGcHourDue(now)) return;
+
+  const slot = slotKey(now);
+  if (lastCompletedSlot === slot) return;
+
+  const report = await probeKnownChats(api);
   // Mark slot complete only after a full pass; 429 / purge failure leave it open for retry.
-  if (!abortedByRateLimit && !purgeFailed) {
-    lastCompletedSlot = slot;
-  }
+  if (passCompleted(report)) lastCompletedSlot = slot;
+}
+
+/**
+ * Owner command: same probe as the scheduler, at any hour.
+ * A finished pass counts as this Moscow hour's slot, so the timer does not repeat it.
+ */
+export function runChatGcNow(api: Api, now = new Date()): Promise<ChatGcManualResult> {
+  if (config.CHAT_GC_ENABLED !== 'true') return Promise.resolve('disabled');
+  if (runningTick) return Promise.resolve('busy');
+  const settled = probeKnownChats(api).then((report) => {
+    if (passCompleted(report)) lastCompletedSlot = slotKey(now);
+    return report;
+  });
+  const job = settled.finally(() => { runningTick = undefined; });
+  runningTick = job.then(() => undefined, () => undefined);
+  return job;
 }
 
 export function startChatGcScheduler(api: Api) {

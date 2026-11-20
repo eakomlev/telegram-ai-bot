@@ -33,6 +33,7 @@ export const OWNER_PRIVATE_COMMANDS: BotCommandDef[] = [
   { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
   { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
   { command: 'memory_refresh', description: 'Обновить память группы за 3 дня' },
+  { command: 'check_chats', description: 'Проверить, что группы ещё доступны' },
 ];
 
 /**
