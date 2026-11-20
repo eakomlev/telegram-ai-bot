@@ -79,6 +79,7 @@ test('owner chat check runs outside the scheduled hour and closes that hour slot
         if (chatId === -5) throw grammyError(403, 'Forbidden: bot was kicked from the group chat');
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     try {
@@ -134,6 +135,53 @@ test('owner chat check refuses when disabled and while a pass is running', async
       await running;
     } finally {
       pool.query = originalQuery;
+    }
+  });
+});
+
+test('deleted basic group still answers getChat but fails member count and is purged', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const purgedIds: string[] = [];
+    const memberCounts: number[] = [];
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
+        return { rows: [{ chat_id: '-15' }, { chat_id: '-16' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string, values: unknown[] = []) => {
+        if (sql.startsWith('DELETE FROM') && values[0] != null) purgedIds.push(String(values[0]));
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => ({ id: chatId, title: 'gone' }),
+      getChatMemberCount: async (chatId: number) => {
+        memberCounts.push(chatId);
+        if (chatId === -15) throw grammyError(403, 'Forbidden: the group chat was deleted');
+        return 3;
+      },
+    } as unknown as Api;
+
+    try {
+      const report = await runChatGcNow(api, zonedMoscowTime(2024, 6, 1, 5, 0));
+      assert.equal(typeof report, 'object');
+      if (typeof report !== 'object') return;
+      assert.deepEqual(memberCounts, [-15, -16]);
+      assert.equal(report.alive, 1);
+      assert.deepEqual(report.purged, [{ chatId: -15, kind: 'gone' }]);
+      assert.ok(purgedIds.includes('-15'));
+      assert.ok(!purgedIds.includes('-16'));
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
     }
   });
 });
@@ -195,6 +243,7 @@ test('chat GC purges on permanent errors, continues on transient, once per slot'
         }
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     const now = zonedMoscowTime(2024, 6, 1, 4, 0);
@@ -255,6 +304,7 @@ test('chat GC purges old id on group→supergroup upgrade errors', async () => {
         }
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     try {
@@ -304,6 +354,7 @@ test('chat GC probes and purges chats outside ALLOWED_CHAT_IDS', async () => {
         }
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     try {
@@ -352,6 +403,7 @@ test('chat GC skips positive private chat ids', async () => {
         }
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     try {
@@ -399,6 +451,7 @@ test('chat GC purges on deactivated group and PEER_ID_INVALID', async () => {
         }
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     try {
@@ -412,9 +465,13 @@ test('chat GC purges on deactivated group and PEER_ID_INVALID', async () => {
   });
 });
 
-test('isPermanentTelegramDeliveryError includes deactivated and peer_id_invalid', () => {
+test('isPermanentTelegramDeliveryError includes deactivated, deleted groups and peer_id_invalid', () => {
   assert.equal(
     isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: group is deactivated')),
+    true,
+  );
+  assert.equal(
+    isPermanentTelegramDeliveryError(grammyError(400, 'Forbidden: the group chat was deleted')),
     true,
   );
   assert.equal(
@@ -499,6 +556,7 @@ test('chat GC aborts remaining probes on 429 and does not complete the slot', as
         }
         return { id: chatId };
       },
+      getChatMemberCount: async () => 2,
     } as unknown as Api;
 
     const now = zonedMoscowTime(2024, 6, 1, 4, 0);
