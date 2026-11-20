@@ -34,6 +34,7 @@ export const OWNER_PRIVATE_COMMANDS: BotCommandDef[] = [
   { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
   { command: 'memory_refresh', description: 'Обновить память группы за 3 дня' },
   { command: 'check_chats', description: 'Проверить, что группы ещё доступны' },
+  { command: 'news_preview', description: 'Пробная новость в личку, не в чат' },
 ];
 
 /**

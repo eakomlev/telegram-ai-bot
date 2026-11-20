@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { getChatSettingsRow, upsertChatSettings, type ChatSettingsRow } from '../core/db.js';
-import { sanitizeSpheres, sphereLabel, type NewsSphereId } from '../news/news-spheres.js';
+import { sanitizeSpheres, type NewsSphereId } from '../news/news-spheres.js';
 
 export const RESPONSE_TONES = ['gentleman', 'pacanchik', 'derzkiy'] as const;
 export type ResponseTone = (typeof RESPONSE_TONES)[number];
@@ -153,9 +153,7 @@ export function cycleSarcasmLevel(current: number) {
 
 export function formatSettings(settings: ChatSettings) {
   const on = (value: boolean) => (value ? 'вкл' : 'выкл');
-  const spheres = settings.newsSpheres.length
-    ? settings.newsSpheres.map((id) => sphereLabel(id)).join(', ')
-    : 'не выбраны';
+  const news = settings.newsEnabled ? 'вкл — тема из памяти чата' : 'выкл';
   return [
     'Настройки этой группы (видят и меняют только администраторы):',
     '',
@@ -168,7 +166,6 @@ export function formatSettings(settings: ChatSettings) {
     `• Автозагрузка видео: ${on(settings.videoEnabled)}`,
     `• Автозагрузка картинок: ${on(settings.galleryEnabled)}`,
     `• Пауза между медиа-ссылками: ${settings.mediaCooldownSeconds} сек.`,
-    `• Ежедневная новость: ${on(settings.newsEnabled)}`,
-    `• Сферы новостей: ${spheres}`,
+    `• Ежедневная новость: ${news}`,
   ].join('\n');
 }

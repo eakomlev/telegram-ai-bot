@@ -16,20 +16,22 @@ import {
 } from '../src/ai/ai.js';
 import { config } from '../src/config.js';
 
-test('web-search news prompt requires search, one real URL, and forbids invention', () => {
-  const prompt = buildNewsSystemPrompt('Игры', { webSearch: true });
-  assert.match(prompt, /Игры/);
+test('web-search news prompt picks a theme from chat memory and forbids invention', () => {
+  const prompt = buildNewsSystemPrompt({ webSearch: true });
+  assert.match(prompt, /основные темы обсуждений/);
+  assert.match(prompt, /недоверенн/i);
   assert.match(prompt, /Обязательно используй веб-поиск|web search/i);
   assert.match(prompt, /Не выдумывай факты/);
   assert.match(prompt, /фейковые URL|ссылки/i);
   assert.match(prompt, /24–48|24-48|48 часов/);
   assert.match(prompt, /ровно одну реальную ссылку/i);
   assert.match(prompt, /Не используй Markdown/);
+  assert.doesNotMatch(prompt, /офис на набережной/);
 });
 
 test('fallback news prompt does not mandate web search', () => {
-  const prompt = buildNewsSystemPrompt('Игры', { webSearch: false });
-  assert.match(prompt, /Игры/);
+  const prompt = buildNewsSystemPrompt({ webSearch: false });
+  assert.match(prompt, /основные темы обсуждений/);
   assert.doesNotMatch(prompt, /Обязательно используй веб-поиск/);
   assert.match(prompt, /Опирайся на свои знания|живого веб-поиска нет/i);
   assert.match(prompt, /Не выдумывай факты/);
@@ -38,14 +40,18 @@ test('fallback news prompt does not mandate web search', () => {
   assert.match(prompt, /Не используй Markdown/);
 });
 
-test('news user prompt asks for web search only when enabled', () => {
-  const withSearch = buildNewsUserPrompt('games', 'Игры', '2026-11-17', { webSearch: true });
+test('news user prompt puts memory in the user message and asks for the key theme', () => {
+  const memory = 'Память чата (внутренний контекст): офис на набережной';
+  const withSearch = buildNewsUserPrompt(memory, '2026-11-17', { webSearch: true });
+  assert.match(withSearch, /офис на набережной/);
+  assert.match(withSearch, /самой характерной/);
   assert.match(withSearch, /веб-поиск/i);
   assert.match(withSearch, /2026-11-17/);
 
-  const withoutSearch = buildNewsUserPrompt('games', 'Игры', '2026-11-17', { webSearch: false });
+  const withoutSearch = buildNewsUserPrompt(memory, '2026-11-17', { webSearch: false });
   assert.doesNotMatch(withoutSearch, /веб-поиск/i);
-  assert.match(withoutSearch, /Пришли одну свежую интересную новость/);
+  assert.match(withoutSearch, /пришли одну свежую новость/i);
+  assert.match(withoutSearch, /офис на набережной/);
 });
 
 test('news web_search tool payload uses RU / Moscow and configured context size', () => {
@@ -61,7 +67,7 @@ test('news web_search tool payload uses RU / Moscow and configured context size'
 });
 
 test('Responses news params include tools, forced tool_choice, and gated low reasoning', () => {
-  const params = buildNewsResponsesCreateParams('games', 'Игры', '2026-11-17');
+  const params = buildNewsResponsesCreateParams('Память чата: кухня и походы', '2026-11-17');
   assert.equal(params.model, newsModel());
   assert.deepEqual(params.tools, [buildWebSearchTool()]);
   assert.equal(params.max_output_tokens, config.NEWS_MAX_OUTPUT_TOKENS);
@@ -73,6 +79,8 @@ test('Responses news params include tools, forced tool_choice, and gated low rea
     assert.equal('reasoning' in params, false);
   }
   assert.match(params.instructions, /Обязательно используй веб-поиск/);
+  assert.doesNotMatch(params.instructions, /кухня и походы/);
+  assert.match(params.input, /кухня и походы/);
   assert.match(params.input, /веб-поиск/i);
   if (config.NEWS_FORCE_WEB_SEARCH === 'true') {
     assert.equal(params.tool_choice, 'required');

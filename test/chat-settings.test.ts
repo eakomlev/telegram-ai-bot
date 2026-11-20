@@ -59,19 +59,19 @@ test('defaults and format mention admin-only controls', () => {
   assert.match(text, /Автоответ на вопросы без ответа: выкл/);
   assert.doesNotMatch(text, /Персонализация/);
   assert.match(text, /Ежедневная новость: выкл/);
-  assert.match(text, /Сферы новостей: не выбраны/);
+  assert.doesNotMatch(text, /Сферы новостей/);
   assert.match(text, new RegExp(String(settings.defaultMessageCount)));
 });
 
-test('formatSettings lists selected news spheres', () => {
+test('formatSettings says daily news follows chat memory', () => {
   const text = formatSettings({
     ...defaultChatSettings(),
     newsEnabled: true,
     newsSpheres: ['ai', 'games'],
   });
-  assert.match(text, /Ежедневная новость: вкл/);
-  assert.match(text, /ИИ \/ нейросети/);
-  assert.match(text, /Игры/);
+  assert.match(text, /Ежедневная новость: вкл — тема из памяти чата/);
+  assert.doesNotMatch(text, /ИИ \/ нейросети/);
+  assert.doesNotMatch(text, /Сферы новостей/);
 });
 
 test('formatSettings shows response tone label', () => {

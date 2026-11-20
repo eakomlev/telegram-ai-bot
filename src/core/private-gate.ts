@@ -1,7 +1,7 @@
 /**
  * Pure private-chat middleware gate: which updates call `next()`.
  * Callback queries always pass (handlers enforce their own auth).
- * Owner message commands: /stats, /costs, /memory_refresh, /check_chats.
+ * Owner message commands: /stats, /costs, /memory_refresh, /check_chats, /news_preview.
  */
 export function shouldPassPrivateMiddleware(input: {
   hasCallbackQuery: boolean;
@@ -11,7 +11,7 @@ export function shouldPassPrivateMiddleware(input: {
   if (input.hasCallbackQuery) return true;
   return (
     input.isOwner &&
-    /^\/(?:stats|costs|memory_refresh|check_chats)(?:@\w+)?(?:\s|$)/i.test(input.messageText)
+    /^\/(?:stats|costs|memory_refresh|check_chats|news_preview)(?:@\w+)?(?:\s|$)/i.test(input.messageText)
   );
 }
 
@@ -19,7 +19,7 @@ const PRIVATE_REDIRECT_DEFAULT =
   'Добавьте меня в чат или группу, чтобы начать работу.\nВ @BotFather: /setprivacy → Disable.';
 
 const PRIVATE_REDIRECT_OWNER_COMMAND =
-  'В личке доступны только /stats, /costs, /memory_refresh и /check_chats.';
+  'В личке доступны только /stats, /costs, /memory_refresh, /check_chats и /news_preview.';
 
 /** Whether a blocked private update should get a reply (any `ctx.message`). */
 export function shouldReplyToBlockedPrivate(input: { hasMessage: boolean }): boolean {

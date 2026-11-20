@@ -72,10 +72,10 @@ async function rescheduleNewsRunWithRetry(chatId: number, nextRunAt: Date) {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-/** Ensure next_run is set when news is on with spheres; clear it when off or empty. Does not touch last_sent_on. */
+/** Ensure next_run is set when news is on; clear it when off. Does not touch last_sent_on. */
 export async function scheduleNewsIfNeeded(chatId: number, settings?: ChatSettings) {
   const resolved = settings ?? await resolveChatSettings(chatId);
-  if (!resolved.newsEnabled || resolved.newsSpheres.length === 0) {
+  if (!resolved.newsEnabled) {
     await rescheduleNewsRun(chatId, null);
     return;
   }
@@ -109,7 +109,12 @@ async function runTick(api: Api, now: Date, clock: () => Date) {
     const claimed = await claimNewsSend(chat.chatId, moscowDate, leaseUntil, claimedAt);
     if (!claimed) continue;
     try {
-      await postNewsToChat(api, chat.chatId, claimed.newsSpheres);
+      const outcome = await postNewsToChat(api, chat.chatId);
+      if (outcome === 'empty') {
+        console.error('Daily news skipped: chat has no memory', { chatId: chat.chatId });
+        await markNewsSentWithRetry(chat.chatId, moscowDate, nextDayNewsRunAt(clock()));
+        continue;
+      }
     } catch (error) {
       console.error('Daily news send failed', {
         chatId: chat.chatId,
