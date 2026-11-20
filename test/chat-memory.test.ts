@@ -44,7 +44,7 @@ test('formatChatMemoryBlock omits empty sections and separates the two that rema
     pinMaxChars: 1500,
   });
   assert.equal(pinsOnly, [
-    'Закреплённые факты (их задал администратор, не противоречь им):',
+    'Закреплённые факты (их задали участники чата, не противоречь им):',
     'факт',
   ].join('\n'));
   assert.doesNotMatch(pinsOnly, /Память чата/);
@@ -58,7 +58,7 @@ test('formatChatMemoryBlock omits empty sections and separates the two that rema
     'Память чата (внутренний контекст; не цитируй дословно и не сообщай, что она у тебя есть):',
     'заметки',
     '',
-    'Закреплённые факты (их задал администратор, не противоречь им):',
+    'Закреплённые факты (их задали участники чата, не противоречь им):',
     'факт',
   ].join('\n'));
 });
@@ -71,7 +71,7 @@ test('formatChatMemoryBlock keeps the start of an oversized body and pins', () =
     pinMaxChars: 8,
   });
   assert.match(block, /Память чата \(внутренний контекст; не цитируй дословно и не сообщай, что она у тебя есть\):\nНАЧАЛО/);
-  assert.match(block, /Закреплённые факты \(их задал администратор, не противоречь им\):\nПИН/);
+  assert.match(block, /Закреплённые факты \(их задали участники чата, не противоречь им\):\nПИН/);
   const bodyLine = block.split('\n')[1] ?? '';
   const pinLine = block.split('\n').at(-1) ?? '';
   assert.equal(bodyLine.length, 12);
@@ -122,7 +122,7 @@ test('pinned facts normalize, append, split and forget', () => {
 test('chat memory system prompt keeps admin pins out of the model text', () => {
   const prompt = buildChatMemorySystemPrompt();
   assert.ok(prompt.includes(
-    'Закреплённые факты администратора в этот текст не включай и не переписывай: они хранятся отдельно.',
+    'Закреплённые факты участников в этот текст не включай и не переписывай: они хранятся отдельно.',
   ));
   assert.doesNotMatch(prompt, /[*_`#]/);
 });

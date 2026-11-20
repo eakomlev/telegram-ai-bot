@@ -224,7 +224,7 @@ const schema = z.object({
   AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES: integer(45, 1, 1440),
   /** Max characters of preceding context for auto-answer prompts. */
   AUTO_ANSWER_CONTEXT_MAX_CHARS: integer(4000, 0, 50000),
-  /** Global gate for the nightly chat-memory merge. Admin pin commands stay available when this is off. */
+  /** Global gate for the nightly chat-memory merge. Pin commands stay available when this is off. */
   CHAT_MEMORY_ENABLED: bool.default('true'),
   /** Chat-memory scheduler poll interval (ms); ticks only merge at CHAT_MEMORY_HOUR_MOSCOW. */
   CHAT_MEMORY_TICK_INTERVAL_MS: integer(60000, 5000, 3600000),

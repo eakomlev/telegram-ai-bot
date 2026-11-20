@@ -7,14 +7,12 @@ import {
   forgetPinnedFact,
   formatMemoryReply,
 } from './chat-memory.js';
-import { requireChatAdmin } from './settings-ui.js';
 
 function commandArgument(ctx: Context): string {
   return typeof ctx.match === 'string' ? ctx.match : '';
 }
 
 export async function replyWithChatMemory(ctx: Context): Promise<void> {
-  if (!(await requireChatAdmin(ctx))) return;
   const memory = await getChatMemory(ctx.chat!.id);
   const text = formatMemoryReply(memory.body, memory.pinned);
   for (const part of splitReply(text, config.TELEGRAM_MAX_MESSAGE_LENGTH)) {
@@ -23,7 +21,6 @@ export async function replyWithChatMemory(ctx: Context): Promise<void> {
 }
 
 export async function rememberChatFact(ctx: Context): Promise<void> {
-  if (!(await requireChatAdmin(ctx))) return;
   const fact = commandArgument(ctx).trim();
   if (!fact) {
     await ctx.reply('Напишите факт после команды: /remember текст');
@@ -55,7 +52,6 @@ export async function rememberChatFact(ctx: Context): Promise<void> {
 }
 
 export async function forgetChatFact(ctx: Context): Promise<void> {
-  if (!(await requireChatAdmin(ctx))) return;
   const arg = commandArgument(ctx).trim();
   if (arg !== '' && !/^\d+$/.test(arg)) {
     await ctx.reply('Использование: /forget — очистить все факты; /forget N — удалить факт номер N из /memory.');
