@@ -20,6 +20,9 @@ export const GROUP_COMMANDS: BotCommandDef[] = [
   { command: 'verse', description: 'Саммари в стихах: N, 24h или 7d' },
   { command: 'gif', description: 'Шуточная GIF по последним сообщениям' },
   { command: 'settings', description: 'Настройки группы (админы)' },
+  { command: 'memory', description: 'Память чата и закреплённые факты (админы)' },
+  { command: 'remember', description: 'Добавить закреплённый факт (админы)' },
+  { command: 'forget', description: 'Удалить закреплённые факты (админы)' },
   { command: 'usage', description: 'Токены OpenAI по группе (админы)' },
   { command: 'help', description: 'Как пользоваться ботом' },
   { command: 'privacy', description: 'Обработка данных' },
@@ -29,6 +32,7 @@ export const GROUP_COMMANDS: BotCommandDef[] = [
 export const OWNER_PRIVATE_COMMANDS: BotCommandDef[] = [
   { command: 'stats', description: 'Статистика чатов и рост за месяц (МСК)' },
   { command: 'costs', description: 'Официальный биллинг OpenAI (месяц МСК)' },
+  { command: 'memory_refresh', description: 'Обновить память группы за 3 дня' },
 ];
 
 /**

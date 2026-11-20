@@ -48,6 +48,30 @@ test('shouldPassPrivateMiddleware allows callbacks and owner stats/costs', () =>
     }),
     false,
   );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/memory_refresh',
+      isOwner: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/memory_refresh@MyBot',
+      isOwner: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldPassPrivateMiddleware({
+      hasCallbackQuery: false,
+      messageText: '/memory_refresh',
+      isOwner: false,
+    }),
+    false,
+  );
 });
 
 test('shouldReplyToBlockedPrivate only when message is present', () => {
@@ -58,7 +82,7 @@ test('shouldReplyToBlockedPrivate only when message is present', () => {
 test('privateBlockedReplyText: default redirect vs owner blocked slash command', () => {
   const defaultReply =
     'Добавьте меня в чат или группу, чтобы начать работу.\nВ @BotFather: /setprivacy → Disable.';
-  const ownerCmdReply = 'В личке доступны только /stats и /costs.';
+  const ownerCmdReply = 'В личке доступны только /stats, /costs и /memory_refresh.';
 
   assert.equal(privateBlockedReplyText({ isOwner: false, messageText: 'hi' }), defaultReply);
   assert.equal(privateBlockedReplyText({ isOwner: false, messageText: '/help' }), defaultReply);

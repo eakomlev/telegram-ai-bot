@@ -274,3 +274,88 @@ test('trimAutoAnswerContext drops oldest whole messages then truncates newest', 
   assert.match(truncated[0]!.text, /…$/);
   assert.ok(`[X]: ${truncated[0]!.text}`.length <= 12);
 });
+
+test('auto-answer Responses params follow web search, medium reasoning, thread and memory', async () => {
+  const {
+    assertAutoAnswerResponsesResult,
+    buildAutoAnswerResponsesCreateParams,
+    buildWebSearchTool,
+  } = await import('../src/ai/ai.js');
+  const { config } = await import('../src/config.js');
+
+  const withSearch = buildAutoAnswerResponsesCreateParams('Где парковка?', 'Ann', [], {
+    webSearch: true,
+    memoryBlock: 'Память чата (внутренний контекст): офис на набережной',
+    model: 'gpt-6-sol',
+  });
+  assert.equal(withSearch.tools?.[0]?.type, 'web_search');
+  assert.deepEqual(withSearch.tools, [buildWebSearchTool()]);
+  assert.equal('tool_choice' in withSearch, false);
+  assert.deepEqual(withSearch.reasoning, { effort: 'medium' });
+  assert.match(withSearch.instructions, /Память чата/);
+  assert.doesNotMatch(withSearch.instructions, /офис на набережной/);
+  assert.match(String(withSearch.input), /офис на набережной/);
+  assert.match(withSearch.instructions, /веб-поиск|web search/i);
+  assert.match(withSearch.instructions, /Не выдумывай факты/);
+  assert.match(withSearch.instructions, /никто не ответил/i);
+
+  const withoutSearch = buildAutoAnswerResponsesCreateParams('Где парковка?', 'Ann', [], {
+    webSearch: false,
+    model: 'gpt-6-sol',
+  });
+  assert.equal('tools' in withoutSearch, false);
+  assert.equal('tool_choice' in withoutSearch, false);
+  assert.deepEqual(withoutSearch.reasoning, { effort: 'medium' });
+  assert.doesNotMatch(withoutSearch.instructions, /веб-поиск|web search/i);
+
+  const withThread = buildAutoAnswerResponsesCreateParams('Где парковка?', 'Ann', [], {
+    webSearch: false,
+    threadBlock: 'Ветка обсуждения:\n[Bob]: у метро',
+    model: config.OPENAI_MODEL,
+  });
+  const input = String(withThread.input);
+  const threadAt = input.indexOf('Ветка обсуждения:');
+  const authorAt = input.indexOf('Автор вопроса:');
+  assert.ok(threadAt >= 0 && authorAt > threadAt);
+  assert.match(input, /Контекст \(недавние сообщения до вопроса\):|Автор вопроса:/);
+
+  const text = assertAutoAnswerResponsesResult({
+    status: 'completed',
+    error: null,
+    output: [{ type: 'message' }],
+    output_text: '  На набережной.  ',
+  });
+  assert.equal(text, 'На набережной.');
+  assert.throws(
+    () => assertAutoAnswerResponsesResult({
+      status: 'completed',
+      error: { code: 'server_error', message: 'boom' },
+      output_text: 'x',
+    }),
+    /Auto-answer Responses API error/,
+  );
+  assert.equal(
+    assertAutoAnswerResponsesResult({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output_text: 'partial',
+    }),
+    'partial\n\nОтвет сокращён из-за ограничения длины.',
+  );
+  assert.throws(
+    () => assertAutoAnswerResponsesResult({
+      status: 'incomplete',
+      incomplete_details: { reason: 'content_filter' },
+      output_text: 'partial',
+    }),
+    /Auto-answer Responses status is incomplete/,
+  );
+  assert.throws(
+    () => assertAutoAnswerResponsesResult({
+      status: 'completed',
+      output: [{ type: 'message' }],
+      output_text: '   ',
+    }),
+    /Empty auto-answer model response/,
+  );
+});

@@ -19,6 +19,7 @@ try {
 
   const expectedTables = [
     'chat_member_snapshots',
+    'chat_memory',
     'chat_settings',
     'messages',
     'openai_usage',
@@ -45,13 +46,13 @@ try {
   const applied = await pool.query<{ id: string }>(
     'SELECT id FROM schema_migrations ORDER BY id',
   );
-  assert.deepEqual(applied.rows.map((r) => r.id), ['001_baseline', '002_drop_personalization']);
+  assert.deepEqual(applied.rows.map((r) => r.id), ['001_baseline', '002_drop_personalization', '003_chat_memory']);
 
   await migrate();
   const appliedAgain = await pool.query<{ id: string }>(
     'SELECT id FROM schema_migrations ORDER BY id',
   );
-  assert.deepEqual(appliedAgain.rows.map((r) => r.id), ['001_baseline', '002_drop_personalization']);
+  assert.deepEqual(appliedAgain.rows.map((r) => r.id), ['001_baseline', '002_drop_personalization', '003_chat_memory']);
 
   await pool.query('DELETE FROM messages WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);
   await pool.query('DELETE FROM summary_requests WHERE chat_id = ANY($1::bigint[])', [[chatA, chatB]]);

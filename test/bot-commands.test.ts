@@ -44,13 +44,17 @@ test('buildCommandRegistrationPlan with owner adds chat scope', () => {
   });
   assert.equal(
     OWNER_PRIVATE_COMMANDS.map((c) => c.command).join(','),
-    'stats,costs',
+    'stats,costs,memory_refresh',
   );
 });
 
-test('group commands exclude me; owner commands are stats and costs only', () => {
+test('group commands exclude me; owner commands are stats, costs and memory refresh', () => {
   const groupCmds = GROUP_COMMANDS.map((c) => c.command);
   const ownerCmds = OWNER_PRIVATE_COMMANDS.map((c) => c.command);
   assert.equal(groupCmds.includes('me'), false);
-  assert.deepEqual(ownerCmds, ['stats', 'costs']);
+  assert.equal(groupCmds.includes('memory'), true);
+  assert.equal(groupCmds.includes('remember'), true);
+  assert.equal(groupCmds.includes('forget'), true);
+  assert.equal(groupCmds.includes('memory_refresh'), false);
+  assert.deepEqual(ownerCmds, ['stats', 'costs', 'memory_refresh']);
 });

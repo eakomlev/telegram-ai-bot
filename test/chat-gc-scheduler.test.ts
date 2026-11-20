@@ -481,6 +481,7 @@ test('purgeChatData deletes chat-scoped tables in one transaction', async () => 
       'BEGIN',
       'DELETE FROM pending_auto_answers',
       'DELETE FROM messages',
+      'DELETE FROM chat_memory',
       'DELETE FROM summary_requests',
       'DELETE FROM chat_member_snapshots',
       'DELETE FROM openai_usage',

@@ -10,6 +10,7 @@ import {
   cleanup,
   deleteMessage,
   ensureChatSettingsDefaults,
+  getChatMemory,
   getOpenAiUsageTotals,
   countNewOpenAiUsageChats,
   listChatStatsForOwner,
@@ -19,6 +20,10 @@ import {
 import { migrate } from './core/migrate.js';
 import { summarize, type SummaryStyle } from './ai/ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary/summary.js';
+import { forgetChatFact, rememberChatFact, replyWithChatMemory } from './chat/chat-memory-commands.js';
+import { startChatMemoryScheduler, stopChatMemoryScheduler } from './chat/chat-memory-scheduler.js';
+import { handleMemoryRefreshCallback, replyWithMemoryRefreshPicker } from './chat/chat-memory-refresh-ui.js';
+import { formatChatMemoryBlock } from './chat/chat-memory.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
 import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
 import { fetchOrganizationCostsMtd, formatOrganizationCostsReport } from './ai/openai-costs.js';
@@ -57,6 +62,9 @@ const help = `Я сохраняю текстовые сообщения и по�
 /gif — по последним сообщениям подобрать шуточную GIF-реакцию
 /gif 40 — то же по 40 сообщениям (можно 24h / 7d)
 /settings — настройки группы (только администраторы)
+/memory — память чата и закреплённые факты (только администраторы)
+/remember текст — добавить закреплённый факт
+/forget — очистить закреплённые факты; /forget N — удалить факт номер N
 /usage — токены по группе за текущий месяц (админы)
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
@@ -65,7 +73,7 @@ const help = `Я сохраняю текстовые сообщения и по�
 
 Там же можно включить автоответ на вопросы без ответа: если общий вопрос в чат (без @упоминаний и без ответа-цитаты) останется без реакции участников ~5 минут, бот мягко ответит (с коротким окном недавних сообщений до вопроса как контекстом).
 
-Упомяните меня (@бот) в сообщении или ответьте на моё сообщение — отвечу. Текст из сообщения и из цитаты учитываю как контекст, плюс короткое окно недавних сообщений до запроса/цитаты.
+Упомяните меня (@бот) в сообщении или ответьте на моё сообщение — отвечу. Учитываю сам запрос, цитату, цепочку ответов на цитату, короткое окно сообщений рядом со старой цитатой и более широкое окно недавних сообщений. Ночная память чата и закреплённые факты — только фон.
 
 Отправьте отдельным сообщением ссылку на YouTube Shorts, TikTok, Instagram Reels или VK Клип — я загружу видео без подписи.
 
@@ -137,6 +145,9 @@ bot.use(async (ctx, next) => {
 bot.command(['start', 'help'], (ctx) => ctx.reply(help));
 bot.command('chatid', (ctx) => ctx.reply(`ID группы: ${ctx.chat.id}`));
 bot.command('settings', (ctx) => replyWithSettings(ctx));
+bot.command('memory', (ctx) => replyWithChatMemory(ctx));
+bot.command('remember', (ctx) => rememberChatFact(ctx));
+bot.command('forget', (ctx) => forgetChatFact(ctx));
 bot.command('usage', async (ctx) => {
   if (!(await requireChatAdmin(ctx))) return;
   const chatId = ctx.chat!.id;
@@ -177,6 +188,7 @@ bot.command('costs', async (ctx) => {
     await status.fail('Не удалось получить расходы OpenAI. Попробуйте позже.');
   }
 });
+bot.command('memory_refresh', (ctx) => replyWithMemoryRefreshPicker(ctx));
 bot.command('stats', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
   if (!ownerUserId) {
@@ -208,10 +220,13 @@ bot.command('stats', async (ctx) => {
 });
 bot.command('privacy', (ctx) => ctx.reply(
   `Бот сохраняет текст и подписи участников, а также текст и подписи исходящих ответов бота на @упоминания и автоответы (сами изображения не сохраняются; не саммари, стихи, GIF, новости и служебные сообщения), ` +
-  `отображаемое имя автора, ID пользователя (для обычных аккаунтов), время, ID сообщений и (для тем форума) ID темы в Postgres на ${config.RETENTION_DAYS} дней. ` +
+  `отображаемое имя автора, ID пользователя (для обычных аккаунтов), время, ID сообщений, ID сообщения, на которое ответили (reply_to_message_id), и (для тем форума) ID темы в Postgres на ${config.RETENTION_DAYS} дней. ` +
+  `Раз в сутки может сохраняться короткое описание чата и отправляться в OpenAI вместе с @упоминаниями, автоответами и саммари. Закреплённые факты администратора (/remember) тоже могут уходить в OpenAI. ` +
+  `Память и закреплённые факты удаляются вместе с данными чата, если чат стал недоступен. ` +
   `Учёт токенов и оценочных расходов OpenAI, а также ежедневные снимки числа участников групп, хранятся ${config.USAGE_RETENTION_DAYS} дней. ` +
   'При /summary, /gif, ежедневных новостях, @упоминаниях и (если включено в /settings) автоответах на вопросы без ответа данные уходят в OpenAI API; ' +
-  'для автоответа и @упоминаний модель также может получить небольшое окно недавних сообщений до вопроса/запроса (включая ранее сохранённые текст и подписи ответов бота; та же тема форума или чат целиком). ' +
+  'для @упоминания модель может получить запрос, цитату, цепочку ответов на цитату, короткое окно рядом с цитатой и более широкое окно недавних сообщений (включая ранее сохранённые текст и подписи ответов бота; та же тема форума или чат целиком). ' +
+  'Для автоответа передаётся окно недавних сообщений до вопроса и, если вопрос сам является ответом, цепочка обсуждения. ' +
   'Ответы /summary, /verse, /gif и новости в историю переписки для контекста не сохраняются. ' +
   'Для /gif поисковый запрос уходит в Giphy; ответ виден участникам группы. ' +
   'Ссылки на видео передаются соответствующему сервису для скачивания; временные файлы удаляются после отправки. Фото, аудио и файлы не анализируются. Удаления Telegram не сообщает: удалённый текст может оставаться до очистки. ' +
@@ -220,6 +235,7 @@ bot.command('privacy', (ctx) => ctx.reply(
 
 bot.on('callback_query:data', async (ctx) => {
   if (await handleSettingsCallback(ctx)) return;
+  if (await handleMemoryRefreshCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
 
@@ -285,6 +301,21 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
     released = true;
     const prepared = prepareMessages(rows, config.MAX_INPUT_CHARS);
     if (!prepared.count) throw new Error('Input cannot fit text budget');
+    let memoryBlock = '';
+    try {
+      const memory = await getChatMemory(ctx.chat!.id);
+      memoryBlock = formatChatMemoryBlock({
+        body: memory.body,
+        pinned: memory.pinned,
+        bodyMaxChars: config.CHAT_MEMORY_PROMPT_MAX_CHARS,
+        pinMaxChars: config.CHAT_MEMORY_PIN_MAX_CHARS,
+      });
+    } catch (error) {
+      console.error('Chat memory load failed', {
+        chatId: ctx.chat!.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     const failText = 'Не удалось составить саммари. Попробуйте позже; владельцу бота стоит проверить подключение, модель и баланс OpenAI.';
     const status = await ctx.reply(style === 'verse' ? '⏳ Сочиняю саммари в стихах…' : '⏳ Готовлю саммари…');
     try {
@@ -293,6 +324,7 @@ async function runSummary(ctx: Context, style: SummaryStyle) {
         settings.sarcasmLevel,
         style,
         settings.responseTone,
+        memoryBlock,
       );
       await recordOpenAiUsage(ctx.chat!.id, {
         kind: 'summary',
@@ -350,6 +382,7 @@ async function store(ctx: Context) {
     sent_at: sentAt,
     message_thread_id: message.message_thread_id ?? null,
     author_user_id: authorUserId,
+    reply_to_message_id: message.reply_to_message?.message_id ?? null,
   });
   if (isHumanUser && authorUserId != null) {
     await ensureChatSettingsDefaults(message.chat.id).catch(() =>
@@ -372,6 +405,7 @@ async function shutdown() {
   if (cleanupTimer) clearInterval(cleanupTimer);
   const draining = Promise.allSettled([
     stopNewsScheduler(),
+    stopChatMemoryScheduler(),
     stopAutoAnswerScheduler(),
     stopChatGcScheduler(),
     aiJobs.stop(),
@@ -396,6 +430,7 @@ try {
   }, config.RETENTION_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
   startNewsScheduler(bot.api);
+  startChatMemoryScheduler();
   const me = await bot.api.getMe();
   if (!me.username) throw new Error('Bot username is required for @mentions');
   setBotIdentity(me.id, me.username);

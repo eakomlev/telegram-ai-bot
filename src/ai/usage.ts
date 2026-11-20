@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import type { OpenAiUsageTotals } from '../core/db.js';
 
-export type UsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer';
+export type UsageKind = 'summary' | 'mention' | 'gif' | 'news' | 'auto_answer' | 'chat_memory';
 
 export type AiUsage = {
   model: string;

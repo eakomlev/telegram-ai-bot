@@ -10,6 +10,8 @@ export type ChatMessage = {
   is_bot?: boolean;
   /** Telegram user id of a normal human author; null for anonymous sender_chat / bots. */
   author_user_id?: number | null;
+  /** Telegram message this row replies to; null when it is not a reply. */
+  reply_to_message_id?: number | null;
 };
 
 export function parseSelection(
