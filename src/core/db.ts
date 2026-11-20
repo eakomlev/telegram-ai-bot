@@ -207,7 +207,6 @@ export type ChatSettingsRow = {
 
 export type DueNewsChat = {
   chatId: number;
-  newsSpheres: string[];
 };
 
 export async function getChatSettingsRow(chatId: number): Promise<ChatSettingsRow | undefined> {
@@ -259,11 +258,10 @@ export async function upsertChatSettings(chatId: number, row: ChatSettingsRow) {
 }
 
 export async function listDueNewsChats(now: Date): Promise<DueNewsChat[]> {
-  const result = await pool.query<{ chat_id: string; news_spheres: string[] }>(
-    `SELECT chat_id::text AS chat_id, news_spheres
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT chat_id::text AS chat_id
      FROM chat_settings
      WHERE news_enabled = true
-       AND cardinality(news_spheres) > 0
        AND news_next_run_at IS NOT NULL
        AND news_next_run_at <= $1::timestamptz
        AND (news_last_sent_on IS NULL OR news_last_sent_on < ($1 AT TIME ZONE 'Europe/Moscow')::date)`,
@@ -271,7 +269,6 @@ export async function listDueNewsChats(now: Date): Promise<DueNewsChat[]> {
   );
   return result.rows.map((row) => ({
     chatId: Number(row.chat_id),
-    newsSpheres: row.news_spheres ?? [],
   }));
 }
 
@@ -285,21 +282,20 @@ export async function claimNewsSend(
   leaseUntil: Date,
   now: Date,
 ): Promise<DueNewsChat | undefined> {
-  const result = await pool.query<{ chat_id: string; news_spheres: string[] }>(
+  const result = await pool.query<{ chat_id: string }>(
     `UPDATE chat_settings
      SET news_next_run_at = $3::timestamptz, updated_at = now()
      WHERE chat_id = $1
        AND news_enabled = true
-       AND cardinality(news_spheres) > 0
        AND news_next_run_at IS NOT NULL
        AND news_next_run_at <= $4::timestamptz
        AND (news_last_sent_on IS NULL OR news_last_sent_on < $2::date)
-     RETURNING chat_id::text AS chat_id, news_spheres`,
+     RETURNING chat_id::text AS chat_id`,
     [String(chatId), moscowDate, leaseUntil, now],
   );
   const row = result.rows[0];
   if (!row) return;
-  return { chatId: Number(row.chat_id), newsSpheres: row.news_spheres ?? [] };
+  return { chatId: Number(row.chat_id) };
 }
 
 /** Mark today's send and schedule the next day's window in one update. */

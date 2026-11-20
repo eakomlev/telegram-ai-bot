@@ -1,15 +1,23 @@
 import type { Api } from 'grammy';
 import { generateInterestingNews } from '../ai/ai.js';
+import { formatChatMemoryBlock } from '../chat/chat-memory.js';
 import { config } from '../config.js';
-import { recordOpenAiUsage } from '../core/db.js';
-import { pickRandomSphere, sanitizeSpheres, sphereLabel } from './news-spheres.js';
+import { getChatMemory, recordOpenAiUsage } from '../core/db.js';
 
-export async function postNewsToChat(api: Api, chatId: number, spheres: readonly string[]) {
-  const cleaned = sanitizeSpheres(spheres);
-  const sphereId = pickRandomSphere(cleaned);
-  if (!sphereId) throw new Error('No news spheres selected');
-  const label = sphereLabel(sphereId);
-  const { text, usage } = await generateInterestingNews(sphereId, label);
+export async function newsMemoryBlock(chatId: number): Promise<string> {
+  const memory = await getChatMemory(chatId);
+  return formatChatMemoryBlock({
+    body: memory.body,
+    pinned: memory.pinned,
+    bodyMaxChars: config.CHAT_MEMORY_PROMPT_MAX_CHARS,
+    pinMaxChars: config.CHAT_MEMORY_PIN_MAX_CHARS,
+  });
+}
+
+async function composeNews(chatId: number): Promise<{ status: 'empty' } | { status: 'ok'; text: string }> {
+  const memoryBlock = await newsMemoryBlock(chatId);
+  if (!memoryBlock.trim()) return { status: 'empty' };
+  const { text, usage } = await generateInterestingNews(memoryBlock);
   await recordOpenAiUsage(chatId, {
     kind: 'news',
     model: usage.model,
@@ -18,7 +26,29 @@ export async function postNewsToChat(api: Api, chatId: number, spheres: readonly
     imageCount: usage.imageCount,
     estimatedCostUsd: usage.estimatedCostUsd,
   }).catch(() => console.error('OpenAI usage record failed', { chatId, kind: 'news' }));
-  // One news item → one Telegram message (avoid partial multi-part sends + duplicate retries).
   const body = (text.trim() || ' ').slice(0, config.TELEGRAM_MAX_MESSAGE_LENGTH);
-  await api.sendMessage(chatId, body, { link_preview_options: { is_disabled: true } });
+  return { status: 'ok', text: body };
+}
+
+/** Daily post into the group. Empty memory does not call the model and does not send. */
+export async function postNewsToChat(api: Api, chatId: number): Promise<'sent' | 'empty'> {
+  const composed = await composeNews(chatId);
+  if (composed.status === 'empty') return 'empty';
+  await api.sendMessage(chatId, composed.text, { link_preview_options: { is_disabled: true } });
+  return 'sent';
+}
+
+const previewInFlight = new Set<number>();
+
+/** Owner preview: same generation, no message to the group. */
+export async function previewNews(
+  chatId: number,
+): Promise<{ status: 'empty' | 'busy' } | { status: 'ok'; text: string }> {
+  if (previewInFlight.has(chatId)) return { status: 'busy' };
+  previewInFlight.add(chatId);
+  try {
+    return await composeNews(chatId);
+  } finally {
+    previewInFlight.delete(chatId);
+  }
 }

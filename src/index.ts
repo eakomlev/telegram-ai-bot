@@ -24,6 +24,7 @@ import { forgetChatFact, rememberChatFact, replyWithChatMemory } from './chat/ch
 import { startChatMemoryScheduler, stopChatMemoryScheduler } from './chat/chat-memory-scheduler.js';
 import { handleMemoryRefreshCallback, replyWithMemoryRefreshPicker } from './chat/chat-memory-refresh-ui.js';
 import { handleChatCheckCallback, replyWithChatCheckConfirm } from './chat/chat-gc-ui.js';
+import { handleNewsPreviewCallback, replyWithNewsPreviewPicker } from './news/news-preview-ui.js';
 import { formatChatMemoryBlock } from './chat/chat-memory.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
 import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
@@ -70,7 +71,7 @@ const help = `Я сохраняю текстовые сообщения и по�
 /privacy — обработка данных
 /chatid — ID группы для настройки доступа
 
-В /settings можно включить ежедневную интересную новость (случайное время 10:00–21:00 по Москве) по выбранным сферам.
+В /settings можно включить ежедневную интересную новость (случайное время 10:00–21:00 по Москве). Тема берётся из памяти чата.
 
 Там же можно включить автоответ на вопросы без ответа: если общий вопрос в чат (без @упоминаний и без ответа-цитаты) останется без реакции участников ~5 минут, бот мягко ответит (с коротким окном недавних сообщений до вопроса как контекстом).
 
@@ -191,6 +192,7 @@ bot.command('costs', async (ctx) => {
 });
 bot.command('memory_refresh', (ctx) => replyWithMemoryRefreshPicker(ctx));
 bot.command('check_chats', (ctx) => replyWithChatCheckConfirm(ctx));
+bot.command('news_preview', (ctx) => replyWithNewsPreviewPicker(ctx));
 bot.command('stats', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
   if (!ownerUserId) {
@@ -239,6 +241,7 @@ bot.on('callback_query:data', async (ctx) => {
   if (await handleSettingsCallback(ctx)) return;
   if (await handleMemoryRefreshCallback(ctx)) return;
   if (await handleChatCheckCallback(ctx)) return;
+  if (await handleNewsPreviewCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
 

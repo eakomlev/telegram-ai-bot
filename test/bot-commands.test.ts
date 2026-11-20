@@ -44,7 +44,7 @@ test('buildCommandRegistrationPlan with owner adds chat scope', () => {
   });
   assert.equal(
     OWNER_PRIVATE_COMMANDS.map((c) => c.command).join(','),
-    'stats,costs,memory_refresh,check_chats',
+    'stats,costs,memory_refresh,check_chats,news_preview',
   );
 });
 
@@ -57,5 +57,6 @@ test('group commands exclude me; owner commands stay private', () => {
   assert.equal(groupCmds.includes('forget'), true);
   assert.equal(groupCmds.includes('memory_refresh'), false);
   assert.equal(groupCmds.includes('check_chats'), false);
-  assert.deepEqual(ownerCmds, ['stats', 'costs', 'memory_refresh', 'check_chats']);
+  assert.equal(groupCmds.includes('news_preview'), false);
+  assert.deepEqual(ownerCmds, ['stats', 'costs', 'memory_refresh', 'check_chats', 'news_preview']);
 });
