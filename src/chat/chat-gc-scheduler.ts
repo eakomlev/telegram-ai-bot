@@ -52,6 +52,87 @@ function passCompleted(report: ChatGcReport): boolean {
   return !report.rateLimited && report.purgeErrors.length === 0;
 }
 
+/**
+ * `getChat` still succeeds for a deleted basic group: the Bot API only refuses
+ * member-list reads (`getChatMemberCount`) with "the group chat was deleted".
+ * A chat counts as alive only when that second call succeeds.
+ */
+async function probeOneChat(api: Api, chatId: number, report: ChatGcReport): Promise<'continue' | 'stop'> {
+  try {
+    await api.getChat(chatId);
+  } catch (error) {
+    return applyProbeError(chatId, error, report);
+  }
+  try {
+    const memberCount = await api.getChatMemberCount(chatId);
+    if (!Number.isFinite(memberCount) || memberCount < 0) {
+      report.probeErrors.push(chatId);
+      console.error('Chat GC probe failed', { chatId, message: 'member count is not a number' });
+      return 'continue';
+    }
+    report.alive += 1;
+    return 'continue';
+  } catch (error) {
+    return applyProbeError(chatId, error, report);
+  }
+}
+
+async function applyProbeError(chatId: number, error: unknown, report: ChatGcReport): Promise<'continue' | 'stop'> {
+  if (error instanceof GrammyError && error.error_code === 429) {
+    console.error('Chat GC rate limited; aborting remaining probes', {
+      chatId,
+      message: error.description,
+    });
+    report.rateLimited = true;
+    return 'stop';
+  }
+  const upgrade = isChatUpgradeError(error);
+  if (upgrade || isPermanentTelegramDeliveryError(error)) {
+    if (upgrade) {
+      console.error('Chat GC purging old id after group→supergroup upgrade', {
+        chatId,
+        migrateToChatId: error instanceof GrammyError
+          ? error.parameters?.migrate_to_chat_id
+          : undefined,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } else {
+      console.error('Chat GC purging inaccessible chat', {
+        chatId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return purgeProbedChat(chatId, upgrade ? 'upgrade' : 'gone', report);
+  }
+  report.probeErrors.push(chatId);
+  console.error('Chat GC probe failed', {
+    chatId,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  return 'continue';
+}
+
+function purgeProbedChat(
+  chatId: number,
+  kind: ChatGcPurgeKind,
+  report: ChatGcReport,
+): Promise<'continue'> {
+  return purgeChatData(chatId).then(
+    () => {
+      report.purged.push({ chatId, kind });
+      return 'continue' as const;
+    },
+    (purgeError: unknown) => {
+      report.purgeErrors.push(chatId);
+      console.error('Chat GC purge failed', {
+        chatId,
+        message: purgeError instanceof Error ? purgeError.message : String(purgeError),
+      });
+      return 'continue' as const;
+    },
+  );
+}
+
 /** Probe every known group. Positive private ids are skipped. Allowlist is ignored. */
 export async function probeKnownChats(api: Api): Promise<ChatGcReport> {
   let chatIds = await listKnownChatIds();
@@ -68,52 +149,8 @@ export async function probeKnownChats(api: Api): Promise<ChatGcReport> {
 
   for (const chatId of chatIds) {
     report.checked += 1;
-    try {
-      await api.getChat(chatId);
-      report.alive += 1;
-    } catch (error) {
-      if (error instanceof GrammyError && error.error_code === 429) {
-        console.error('Chat GC rate limited; aborting remaining probes', {
-          chatId,
-          message: error.description,
-        });
-        report.rateLimited = true;
-        break;
-      }
-      const upgrade = isChatUpgradeError(error);
-      if (upgrade || isPermanentTelegramDeliveryError(error)) {
-        if (upgrade) {
-          console.error('Chat GC purging old id after group→supergroup upgrade', {
-            chatId,
-            migrateToChatId: error instanceof GrammyError
-              ? error.parameters?.migrate_to_chat_id
-              : undefined,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        } else {
-          console.error('Chat GC purging inaccessible chat', {
-            chatId,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-        try {
-          await purgeChatData(chatId);
-          report.purged.push({ chatId, kind: upgrade ? 'upgrade' : 'gone' });
-        } catch (purgeError) {
-          report.purgeErrors.push(chatId);
-          console.error('Chat GC purge failed', {
-            chatId,
-            message: purgeError instanceof Error ? purgeError.message : String(purgeError),
-          });
-        }
-      } else {
-        report.probeErrors.push(chatId);
-        console.error('Chat GC probe failed', {
-          chatId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    const outcome = await probeOneChat(api, chatId, report);
+    if (outcome === 'stop') break;
     if (config.CHAT_GC_PROBE_DELAY_MS > 0) {
       await sleep(config.CHAT_GC_PROBE_DELAY_MS);
     }

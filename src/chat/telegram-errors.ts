@@ -10,7 +10,8 @@ export function isPermanentTelegramDeliveryError(error: unknown): boolean {
     || description.includes('bot was kicked')
     || description.includes('bot is not a member')
     || description.includes('group chat was upgraded')
-    || description.includes('group is deactivated')
+    ||     description.includes('group is deactivated')
+    || description.includes('group chat was deleted')
     || description.includes('peer_id_invalid')
   );
 }
