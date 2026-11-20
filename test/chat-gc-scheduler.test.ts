@@ -7,9 +7,10 @@ import {
   runChatGcSchedulerTick,
   stopChatGcScheduler,
 } from '../src/chat/chat-gc-scheduler.js';
-import { config } from '../src/config.js';
+import { allowedChatIds, config } from '../src/config.js';
 import { pool, purgeChatData } from '../src/core/db.js';
 import { zonedMoscowTime } from '../src/core/moscow-time.js';
+import { isPermanentTelegramDeliveryError } from '../src/chat/telegram-errors.js';
 
 function grammyError(
   errorCode: number,
@@ -130,7 +131,7 @@ test('chat GC purges on permanent errors, continues on transient, once per slot'
   });
 });
 
-test('chat GC does not purge on group→supergroup upgrade errors', async () => {
+test('chat GC purges old id on group→supergroup upgrade errors', async () => {
   await withGcTestEnv(async () => {
     const originalQuery = pool.query;
     const originalConnect = pool.connect;
@@ -171,12 +172,121 @@ test('chat GC does not purge on group→supergroup upgrade errors', async () => 
     try {
       await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 4, 0));
       assert.deepEqual(probed, [-50, -51]);
-      assert.deepEqual(purgedIds, []);
+      assert.ok(purgedIds.includes('-50'));
+      assert.ok(!purgedIds.includes('-51'));
     } finally {
       pool.query = originalQuery;
       pool.connect = originalConnect;
     }
   });
+});
+
+test('chat GC probes and purges chats outside ALLOWED_CHAT_IDS', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const purgedIds: string[] = [];
+    const probed: number[] = [];
+    const previousAllowlist = [...allowedChatIds];
+    allowedChatIds.clear();
+    allowedChatIds.add('-100');
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+        return { rows: [{ chat_id: '-200' }, { chat_id: '-100' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string, values: unknown[] = []) => {
+        if (sql.startsWith('DELETE FROM') && values[0] != null) {
+          purgedIds.push(String(values[0]));
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => {
+        probed.push(chatId);
+        if (chatId === -200) {
+          throw grammyError(400, 'Bad Request: chat not found');
+        }
+        return { id: chatId };
+      },
+    } as unknown as Api;
+
+    try {
+      await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 4, 0));
+      assert.deepEqual(probed, [-200, -100]);
+      assert.ok(purgedIds.includes('-200'));
+      assert.ok(!purgedIds.includes('-100'));
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
+      allowedChatIds.clear();
+      for (const id of previousAllowlist) allowedChatIds.add(id);
+    }
+  });
+});
+
+test('chat GC purges on deactivated group and PEER_ID_INVALID', async () => {
+  await withGcTestEnv(async () => {
+    const originalQuery = pool.query;
+    const originalConnect = pool.connect;
+    const purgedIds: string[] = [];
+
+    pool.query = (async (sql: string) => {
+      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+        return { rows: [{ chat_id: '-80' }, { chat_id: '-81' }] };
+      }
+      return { rows: [] };
+    }) as typeof pool.query;
+
+    pool.connect = (async () => ({
+      query: async (sql: string, values: unknown[] = []) => {
+        if (sql.startsWith('DELETE FROM') && values[0] != null) {
+          purgedIds.push(String(values[0]));
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    })) as typeof pool.connect;
+
+    const api = {
+      getChat: async (chatId: number) => {
+        if (chatId === -80) {
+          throw grammyError(400, 'Bad Request: group is deactivated');
+        }
+        if (chatId === -81) {
+          throw grammyError(400, 'Bad Request: PEER_ID_INVALID');
+        }
+        return { id: chatId };
+      },
+    } as unknown as Api;
+
+    try {
+      await runChatGcSchedulerTick(api, zonedMoscowTime(2024, 6, 1, 4, 0));
+      assert.ok(purgedIds.includes('-80'));
+      assert.ok(purgedIds.includes('-81'));
+    } finally {
+      pool.query = originalQuery;
+      pool.connect = originalConnect;
+    }
+  });
+});
+
+test('isPermanentTelegramDeliveryError includes deactivated and peer_id_invalid', () => {
+  assert.equal(
+    isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: group is deactivated')),
+    true,
+  );
+  assert.equal(
+    isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: PEER_ID_INVALID')),
+    true,
+  );
 });
 
 test('chat GC leaves slot open when purge fails so the next tick retries', async () => {

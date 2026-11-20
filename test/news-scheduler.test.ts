@@ -62,6 +62,8 @@ test('isPermanentTelegramDeliveryError detects 403 and gone chats', () => {
   assert.equal(isPermanentTelegramDeliveryError(grammyError(403, 'Forbidden: bot was kicked from the group chat')), true);
   assert.equal(isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: chat not found')), true);
   assert.equal(isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: bot is not a member of the group chat')), true);
+  assert.equal(isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: group is deactivated')), true);
+  assert.equal(isPermanentTelegramDeliveryError(grammyError(400, 'Bad Request: PEER_ID_INVALID')), true);
   assert.equal(isPermanentTelegramDeliveryError(grammyError(429, 'Too Many Requests: retry after 3')), false);
   assert.equal(isPermanentTelegramDeliveryError(new Error('network down')), false);
 });

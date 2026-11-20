@@ -10,12 +10,14 @@ export function isPermanentTelegramDeliveryError(error: unknown): boolean {
     || description.includes('bot was kicked')
     || description.includes('bot is not a member')
     || description.includes('group chat was upgraded')
+    || description.includes('group is deactivated')
+    || description.includes('peer_id_invalid')
   );
 }
 
 /**
  * Group → supergroup upgrade: old chat_id is dead but the community lives under a new id.
- * Still a permanent delivery failure for the old id; GC must not purge (data may migrate later).
+ * Still a permanent delivery failure for the old id; GC purges the orphaned old id.
  */
 export function isChatUpgradeError(error: unknown): boolean {
   if (!(error instanceof GrammyError)) return false;

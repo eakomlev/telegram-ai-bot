@@ -1,6 +1,6 @@
 import type { Api } from 'grammy';
 import { GrammyError } from 'grammy';
-import { allowedChatIds, chatGcHoursMoscow, config } from '../config.js';
+import { chatGcHoursMoscow, config } from '../config.js';
 import { listKnownChatIds, purgeChatData } from '../core/db.js';
 import { moscowDateString, moscowParts } from '../core/moscow-time.js';
 import { wipeChatDraftDir } from '../personalization/personalization.js';
@@ -42,10 +42,9 @@ async function runTick(api: Api, now: Date) {
   const slot = slotKey(now);
   if (lastCompletedSlot === slot) return;
 
+  // Probe all known ids (ignore ALLOWED_CHAT_IDS). Skip positive private-chat ids.
   let chatIds = await listKnownChatIds();
-  if (allowedChatIds.size) {
-    chatIds = chatIds.filter((id) => allowedChatIds.has(String(id)));
-  }
+  chatIds = chatIds.filter((id) => id < 0);
 
   let abortedByRateLimit = false;
   let purgeFailed = false;
@@ -61,20 +60,22 @@ async function runTick(api: Api, now: Date) {
         abortedByRateLimit = true;
         break;
       }
-      if (isChatUpgradeError(error)) {
-        // Old id is gone; community continues under migrate_to_chat_id — do not purge.
-        console.error('Chat GC skipping upgraded group (leave data for retention/migrate)', {
-          chatId,
-          migrateToChatId: error instanceof GrammyError
-            ? error.parameters?.migrate_to_chat_id
-            : undefined,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } else if (isPermanentTelegramDeliveryError(error)) {
-        console.error('Chat GC purging inaccessible chat', {
-          chatId,
-          message: error instanceof Error ? error.message : String(error),
-        });
+      const upgrade = isChatUpgradeError(error);
+      if (upgrade || isPermanentTelegramDeliveryError(error)) {
+        if (upgrade) {
+          console.error('Chat GC purging old id after group→supergroup upgrade', {
+            chatId,
+            migrateToChatId: error instanceof GrammyError
+              ? error.parameters?.migrate_to_chat_id
+              : undefined,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } else {
+          console.error('Chat GC purging inaccessible chat', {
+            chatId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
         try {
           await purgeChatData(chatId);
           await wipeChatDraftDir(chatId);
