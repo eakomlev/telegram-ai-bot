@@ -1,6 +1,6 @@
 # Telegram AI Bot
 
-Бот для групповых чатов Telegram: сохраняет текст и подписи, делает саммари и стихи, отвечает на @упоминания (в т.ч. с картинками и мемами), подбирает GIF-реакции, автоотвечает на вопросы без ответа, публикует ежедневные новости, ведёт лёгкую персонализацию участников, репостит короткие видео и галереи (включая Wildberries). Стек: TypeScript, Node.js 22, grammY, OpenAI API, PostgreSQL 17. Запуск через Docker Compose и long polling — домен и открытый HTTP-порт не нужны.
+Бот для групповых чатов Telegram: сохраняет текст и подписи, делает саммари и стихи, отвечает на @упоминания (в т.ч. с картинками и мемами), подбирает GIF-реакции, автоотвечает на вопросы без ответа, публикует ежедневные новости, репостит короткие видео и галереи (включая Wildberries). Стек: TypeScript, Node.js 22, grammY, OpenAI API, PostgreSQL 17. Запуск через Docker Compose и long polling — домен и открытый HTTP-порт не нужны.
 
 **Важно:** на один токен бота должен работать только один polling-процесс. Несколько экземпляров без координации дадут дубли ответов и гонки планировщиков. Сообщения участников и ответы на @упоминания/автоответы уходят в OpenAI — не используйте бота для данных, которые нельзя отправлять в облако. `/usage` — токены из ответов модели по группе за месяц (МСК). Официальный биллинг организации за текущий месяц (МСК) — owner-only `/costs` через Admin API (`OPENAI_ADMIN_API_KEY`).
 
@@ -42,7 +42,6 @@ src/
   mention/                 # @упоминания и reply-to-bot
   auto-answer/             # очередь и планировщик автоответов
   news/                    # генерация и планировщик новостей, сферы
-  personalization/         # характеристики участников + nightly job
   gif/                     # /gif + Giphy
   media/                   # video, gallery, marketplace (Wildberries)
 ```
@@ -57,19 +56,15 @@ src/
 | `/verse` | То же, но в виде юмористического стиха |
 | `/gif` | GIF-реакция по недавним сообщениям (нужен `GIPHY_API_KEY`) |
 | `/gif 40` / `/gif 24h` | То же с числом или периодом |
-| `/me` | Своя сохранённая характеристика в этой группе (без AI, без кулдауна) |
 | `/settings` | Inline-меню настроек группы (только админы) |
 | `/usage` | Токены за текущий месяц по группе (админы) |
 | `/stats` | Рост чатов/участников за месяц (МСК) и токены по чатам — только в личке у `OWNER_USER_ID` |
 | `/costs` | Официальные расходы и токены completions организации OpenAI за текущий месяц (МСК, MTD) — только в личке у `OWNER_USER_ID`; нужен `OPENAI_ADMIN_API_KEY` |
-| `/personalize` | Выбор группы (inline) и ручной запуск персонализации — только в личке у `OWNER_USER_ID` |
-| `/personalize <chat_id>` | То же для одного чата (без picker) |
-| `/personalize_results` | Просмотр сохранённых характеристик участников (picker групп → участников) — только в личке у `OWNER_USER_ID` |
 | `/help` / `/start` | Справка |
 | `/privacy` | Что сохраняется и куда уходит |
 | `/chatid` | ID группы для `ALLOWED_CHAT_IDS` |
 
-По умолчанию саммари/стихи/GIF доступны только администраторам (`SUMMARY_ADMIN_ONLY` / настройка чата). Для анонимного админа запрос нужно отправить от личного аккаунта. В личке бот просит добавить его в чат/группу; у владельца в DM работают `/stats`, `/costs`, `/personalize` и `/personalize_results`. Меню команд в Telegram показывает эти четыре только для `OWNER_USER_ID` (scope `chat` на личный чат владельца; `all_private_chats` пустой, чтобы остальные DM не видели команды).
+По умолчанию саммари/стихи/GIF доступны только администраторам (`SUMMARY_ADMIN_ONLY` / настройка чата). Для анонимного админа запрос нужно отправить от личного аккаунта. В личке бот просит добавить его в чат/группу; у владельца в DM работают `/stats` и `/costs`. Меню команд в Telegram показывает эти две только для `OWNER_USER_ID` (scope `chat` на личный чат владельца; `all_private_chats` пустой, чтобы остальные DM не видели команды).
 
 ## Как устроены подсистемы
 
@@ -87,7 +82,7 @@ src/
 
 ### @упоминания
 
-Глобальный gate `MENTION_ENABLED` + переключатель в `/settings`. Срабатывает на @бота / `text_mention` / reply на сообщение бота. В контекст входят текст/подпись запроса и цитаты, до `MENTION_MAX_INPUT_IMAGES` картинок (vision, `MENTION_VISION_*`, размер `MENTION_MAX_INPUT_IMAGE_MB`), плюс окно предшествующих сообщений (`MENTION_CONTEXT_*`). Ответ может содержать до `MENTION_MAX_IMAGES` сгенерированных картинок (`OPENAI_IMAGE_MODEL`); ключевые слова вроде «мем»/«демотиватор» включают meme-режим. При `MENTION_WEB_SEARCH=true` обычные текстовые ответы идут через Responses API + hosted `web_search` (`tool_choice` auto — поиск не обязателен; размер контекста поиска — `NEWS_SEARCH_CONTEXT_SIZE`; нужен тот же `/v1/responses` + `web_search`, что и для новостей); входные фото по-прежнему передаются в модель (vision). Мемы и явные запросы на генерацию картинок («нарисуй…», `generate image`, …) остаются на Chat Completions с `attach_image`. `MENTION_WEB_SEARCH=false` — Completions для всех упоминаний без веба. Кулдаун `MENTION_COOLDOWN_SECONDS`. При включённой персонализации в промпт может попасть короткая характеристика собеседника (только чаты с числом участников &lt; `PERSONALIZATION_MAX_CHAT_MEMBERS`).
+Глобальный gate `MENTION_ENABLED` + переключатель в `/settings`. Срабатывает на @бота / `text_mention` / reply на сообщение бота. В контекст входят текст/подпись запроса и цитаты, до `MENTION_MAX_INPUT_IMAGES` картинок (vision, `MENTION_VISION_*`, размер `MENTION_MAX_INPUT_IMAGE_MB`), плюс окно предшествующих сообщений (`MENTION_CONTEXT_*`). Ответ может содержать до `MENTION_MAX_IMAGES` сгенерированных картинок (`OPENAI_IMAGE_MODEL`); ключевые слова вроде «мем»/«демотиватор» включают meme-режим. При `MENTION_WEB_SEARCH=true` обычные текстовые ответы идут через Responses API + hosted `web_search` (`tool_choice` auto — поиск не обязателен; размер контекста поиска — `NEWS_SEARCH_CONTEXT_SIZE`; нужен тот же `/v1/responses` + `web_search`, что и для новостей); входные фото по-прежнему передаются в модель (vision). Мемы и явные запросы на генерацию картинок («нарисуй…», `generate image`, …) остаются на Chat Completions с `attach_image`. `MENTION_WEB_SEARCH=false` — Completions для всех упоминаний без веба. Кулдаун `MENTION_COOLDOWN_SECONDS`.
 
 ### Автоответ на вопросы без ответа
 
@@ -97,15 +92,9 @@ src/
 
 Глобальный `NEWS_ENABLED` + включение и сферы в `/settings`. Случайное время в окне 10:00–21:00 Europe/Moscow. По умолчанию Responses API + hosted `web_search` (`NEWS_WEB_SEARCH=true`); `false` — откат на Chat Completions без веба. Модель: `OPENAI_NEWS_MODEL` или `OPENAI_MODEL`. Планировщик тикает каждые `NEWS_TICK_INTERVAL_MS`; мягкий retry — `NEWS_RETRY_MINUTES`. Lease claim масштабируется от `OPENAI_TIMEOUT_MS × (1 + OPENAI_MAX_RETRIES) + 60s` (минимум 3 мин), чтобы не было двойной отправки.
 
-### Персонализация
-
-Глобальный `PERSONALIZATION_ENABLED`; в чате по умолчанию **вкл**. Ночной проход около `PERSONALIZATION_HOUR_MOSCOW` (МСК): анализ недавней переписки активных участников, черновики характеристик, merge в БД. Не работает при ≥ `PERSONALIZATION_MAX_CHAT_MEMBERS` участниках. Характеристики используются во внутренних промптах @упоминаний/автоответов. Участник может посмотреть свою сохранённую характеристику в группе командой `/me` (полный текст из БД; не требует `PERSONALIZATION_ENABLED` / флага чата / лимита участников — показывает то, что уже сохранено). Модель: `OPENAI_PERSONALIZATION_MODEL` или `OPENAI_MODEL`.
-
-Владелец может вручную запустить проход в личке: `/personalize` показывает inline-выбор группы (без выбора персонализация не стартует); `/personalize <chat_id>` — короткий путь для одного чата. Игнорируются час МСК и same-day claim, но сохраняются глобальный/per-chat флаги, `ALLOWED_CHAT_IDS` и soft-skip по размеру чата / отсутствию сообщений. После успешного или soft-skip прохода дата `personalization_last_run_on` ставится на сегодня (МСК), чтобы ночной тик не дублировал работу. Просмотр уже сохранённых характеристик — `/personalize_results` (группы с ≥1 непустой характеристикой → участники → полный текст; не запускает проход и не требует `PERSONALIZATION_ENABLED`).
-
 ### Очистка недоступных чатов (chat GC)
 
-Глобальный `CHAT_GC_ENABLED`. Планировщик тикает каждые `CHAT_GC_TICK_INTERVAL_MS`, но реально работает только в часы МСК из `CHAT_GC_HOURS_MOSCOW` (по умолчанию `4,16` ≈ 2 раза в сутки). GC зондирует **все** известные групповые `chat_id` (отрицательные) и **игнорирует** `ALLOWED_CHAT_IDS` (allowlist — только gate для действий вроде новостей/персонализации, не для очистки сирот); положительные private id не зондируются и не чистятся. Для каждого id вызывается `getChat`; при постоянной ошибке Telegram (403 / chat not found / kicked / not a member / deactivated / peer_id_invalid) удаляются связанные строки в БД и черновики персонализации. Upgrade group→supergroup **чистит старый id** (сообщество живёт под новым id как отдельный чат; remap истории нет). `video_cache` не трогается. При 429 или ошибке purge слот не помечается выполненным (повтор на следующем тике). Пауза между зондами: `CHAT_GC_PROBE_DELAY_MS`.
+Глобальный `CHAT_GC_ENABLED`. Планировщик тикает каждые `CHAT_GC_TICK_INTERVAL_MS`, но реально работает только в часы МСК из `CHAT_GC_HOURS_MOSCOW` (по умолчанию `4,16` ≈ 2 раза в сутки). GC зондирует **все** известные групповые `chat_id` (отрицательные) и **игнорирует** `ALLOWED_CHAT_IDS` (allowlist — только gate для действий вроде новостей, не для очистки сирот); положительные private id не зондируются и не чистятся. Для каждого id вызывается `getChat`; при постоянной ошибке Telegram (403 / chat not found / kicked / not a member / deactivated / peer_id_invalid) удаляются связанные строки в БД. Upgrade group→supergroup **чистит старый id** (сообщество живёт под новым id как отдельный чат; remap истории нет). `video_cache` не трогается. При 429 или ошибке purge слот не помечается выполненным (повтор на следующем тике). Пауза между зондами: `CHAT_GC_PROBE_DELAY_MS`.
 
 ### Видео
 
@@ -126,7 +115,7 @@ src/
 
 ### `/settings`
 
-Inline-меню только для админов: саммари только админам, число сообщений, сарказм, тон (джентльмен / пацанчик / дерзкий), mentions, автоответ, персонализация, видео/картинки, пауза медиа, новости и сферы, сброс. Сброс чистит настройки чата и отменяет pending автоответы.
+Inline-меню только для админов: саммари только админам, число сообщений, сарказм, тон (джентльмен / пацанчик / дерзкий), mentions, автоответ, видео/картинки, пауза медиа, новости и сферы, сброс. Сброс чистит настройки чата и отменяет pending автоответы.
 
 ### `/usage`, `/stats` и `/costs`
 
@@ -148,7 +137,7 @@ Inline-меню только для админов: саммари только 
 | `OPENAI_API_KEY` | — | Ключ OpenAI |
 | `POSTGRES_PASSWORD` | — | Пароль Postgres в Compose |
 | `ALLOWED_CHAT_IDS` | пусто | CSV отрицательных group id; пусто — все группы (только для доверенного использования) |
-| `OWNER_USER_ID` | пусто | Telegram user id владельца для `/stats`, `/costs`, `/personalize` и `/personalize_results` |
+| `OWNER_USER_ID` | пусто | Telegram user id владельца для `/stats` и `/costs` |
 | `SUMMARY_ADMIN_ONLY` | `true` | Дефолт «саммари только админам» для новых чатов |
 
 ### OpenAI
@@ -158,7 +147,6 @@ Inline-меню только для админов: саммари только 
 | `OPENAI_ADMIN_API_KEY` | пусто | Admin API key для owner `/costs` (биллинг org); не путать с `OPENAI_API_KEY` |
 | `OPENAI_MODEL` | `gpt-6-sol` | Основная Chat Completions; для `gpt-6*` ставится `reasoning_effort=none` |
 | `OPENAI_NEWS_MODEL` | пусто | Модель новостей; пусто → `OPENAI_MODEL` |
-| `OPENAI_PERSONALIZATION_MODEL` | пусто | Модель персонализации; пусто → `OPENAI_MODEL` |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-1-mini` | Генерация картинок в @упоминаниях |
 | `OPENAI_BASE_URL` | пусто | Совместимый endpoint; для mentions/news с вебом нужен `/v1/responses` + `web_search` |
 | `OPENAI_TIMEOUT_MS` | `90000` | Таймаут SDK; для mentions/news web_search часто `120000+` |
@@ -246,23 +234,6 @@ Inline-меню только для админов: саммари только 
 | `NEWS_WEB_SEARCH` | `true` | Responses + `web_search` |
 | `NEWS_SEARCH_CONTEXT_SIZE` | `medium` | `low` / `medium` / `high` |
 | `NEWS_FORCE_WEB_SEARCH` | `true` | `tool_choice: required` |
-
-### Персонализация
-
-| Переменная | По умолчанию | Назначение |
-| --- | --- | --- |
-| `PERSONALIZATION_ENABLED` | `true` | Глобальный gate |
-| `PERSONALIZATION_TICK_INTERVAL_MS` | `60000` | Тик планировщика |
-| `PERSONALIZATION_HOUR_MOSCOW` | `3` | Час запуска (МСК) |
-| `PERSONALIZATION_LOOKBACK_HOURS` | `24` | Глубина переписки |
-| `PERSONALIZATION_MAX_CHAT_MEMBERS` | `20` | Порог «чатов слишком много» (строго меньше) |
-| `PERSONALIZATION_MAX_USERS_PER_CHAT` | `30` | Сколько участников обрабатывать |
-| `PERSONALIZATION_MAX_MESSAGES` | `500` | Сообщений в выборке |
-| `PERSONALIZATION_MAX_INPUT_CHARS` | `12000` | Бюджет транскрипта |
-| `PERSONALIZATION_MAX_OUTPUT_TOKENS` | `500` | Merge/одиночный ответ |
-| `PERSONALIZATION_DRAFT_MAX_OUTPUT_TOKENS` | `1500` | Бюджет draft JSON на пачку |
-| `PERSONALIZATION_PROMPT_MAX_CHARS` | `3000` | Обрезка характеристики в промпте |
-| `PERSONALIZATION_BATCH_USERS` | `10` | Размер пачки пользователей |
 
 ### Очистка чатов (chat GC)
 
@@ -379,4 +350,4 @@ npm run build
 
 CI гоняет unit-тесты, Postgres integration и сборку образа. Живые Telegram/OpenAI проверки — только с вашими ключами и оплаченным балансом.
 
-Планировщики (новости, автоответ, персонализация) не запускают перекрывающиеся тики в одном процессе. При штатной остановке бот дожидается начатых AI/media задач перед закрытием пула БД.
+Планировщики (новости, автоответ, chat GC) не запускают перекрывающиеся тики в одном процессе. При штатной остановке бот дожидается начатых AI/media задач перед закрытием пула БД.

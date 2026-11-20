@@ -45,7 +45,6 @@ const sampleMonth = {
   gifRequests: 0,
   newsRequests: 0,
   autoAnswerRequests: 0,
-  personalizationRequests: 0,
   promptTokens: 1500,
   completionTokens: 400,
   imageCount: 1,

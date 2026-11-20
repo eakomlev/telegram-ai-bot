@@ -80,7 +80,7 @@ test('chat GC purges on permanent errors, continues on transient, once per slot'
     const probed: number[] = [];
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '-1' }, { chat_id: '-2' }, { chat_id: '-3' }] };
       }
       return { rows: [] };
@@ -139,7 +139,7 @@ test('chat GC purges old id on group→supergroup upgrade errors', async () => {
     const probed: number[] = [];
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '-50' }, { chat_id: '-51' }] };
       }
       return { rows: [] };
@@ -192,7 +192,7 @@ test('chat GC probes and purges chats outside ALLOWED_CHAT_IDS', async () => {
     allowedChatIds.add('-100');
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '-200' }, { chat_id: '-100' }] };
       }
       return { rows: [] };
@@ -240,7 +240,7 @@ test('chat GC skips positive private chat ids', async () => {
     const probed: number[] = [];
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '12345' }, { chat_id: '-90' }] };
       }
       return { rows: [] };
@@ -285,7 +285,7 @@ test('chat GC purges on deactivated group and PEER_ID_INVALID', async () => {
     const purgedIds: string[] = [];
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '-80' }, { chat_id: '-81' }] };
       }
       return { rows: [] };
@@ -344,7 +344,7 @@ test('chat GC leaves slot open when purge fails so the next tick retries', async
     let failPurge = true;
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '-70' }] };
       }
       return { rows: [] };
@@ -397,7 +397,7 @@ test('chat GC aborts remaining probes on 429 and does not complete the slot', as
     let pass = 0;
 
     pool.query = (async (sql: string) => {
-      if (sql.includes('UNION') && sql.includes('chat_participants')) {
+      if (sql.includes('UNION') && sql.includes('chat_member_snapshots')) {
         return { rows: [{ chat_id: '-10' }, { chat_id: '-11' }] };
       }
       return { rows: [] };
@@ -482,7 +482,6 @@ test('purgeChatData deletes chat-scoped tables in one transaction', async () => 
       'DELETE FROM pending_auto_answers',
       'DELETE FROM messages',
       'DELETE FROM summary_requests',
-      'DELETE FROM chat_participants',
       'DELETE FROM chat_member_snapshots',
       'DELETE FROM openai_usage',
       'DELETE FROM chat_settings',

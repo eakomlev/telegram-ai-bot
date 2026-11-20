@@ -3,7 +3,6 @@ import { GrammyError } from 'grammy';
 import { chatGcHoursMoscow, config } from '../config.js';
 import { listKnownChatIds, purgeChatData } from '../core/db.js';
 import { moscowDateString, moscowParts } from '../core/moscow-time.js';
-import { wipeChatDraftDir } from '../personalization/personalization.js';
 import { isChatUpgradeError, isPermanentTelegramDeliveryError } from './telegram-errors.js';
 
 let chatGcTimer: NodeJS.Timeout | undefined;
@@ -78,7 +77,6 @@ async function runTick(api: Api, now: Date) {
         }
         try {
           await purgeChatData(chatId);
-          await wipeChatDraftDir(chatId);
         } catch (purgeError) {
           purgeFailed = true;
           console.error('Chat GC purge failed', {

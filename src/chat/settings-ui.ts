@@ -45,8 +45,6 @@ function settingsKeyboard(settings: ChatSettings) {
     .row()
     .text(`${on(settings.autoAnswerEnabled)} Автоответ на вопросы без ответа`, `${PREFIX}autoans`)
     .row()
-    .text(`${on(settings.personalizationEnabled)} Персонализация участников`, `${PREFIX}person`)
-    .row()
     .text(`${on(settings.videoEnabled)} Видео`, `${PREFIX}video`)
     .text(`${on(settings.galleryEnabled)} Картинки`, `${PREFIX}gallery`)
     .row()
@@ -135,11 +133,6 @@ async function applyAction(
       }
       return next;
     }
-    case 'person':
-      return saveChatSettings(chatId, {
-        ...settings,
-        personalizationEnabled: !settings.personalizationEnabled,
-      });
     case 'news': {
       const next = await saveChatSettings(chatId, { ...settings, newsEnabled: !settings.newsEnabled });
       await scheduleNewsIfNeeded(chatId, next);

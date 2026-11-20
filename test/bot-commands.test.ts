@@ -44,17 +44,13 @@ test('buildCommandRegistrationPlan with owner adds chat scope', () => {
   });
   assert.equal(
     OWNER_PRIVATE_COMMANDS.map((c) => c.command).join(','),
-    'stats,costs,personalize,personalize_results',
+    'stats,costs',
   );
 });
 
-test('me is a group command, not an owner private command', () => {
+test('group commands exclude me; owner commands are stats and costs only', () => {
   const groupCmds = GROUP_COMMANDS.map((c) => c.command);
   const ownerCmds = OWNER_PRIVATE_COMMANDS.map((c) => c.command);
-  assert.ok(groupCmds.includes('me'));
-  assert.equal(
-    GROUP_COMMANDS.find((c) => c.command === 'me')?.description,
-    'Моя характеристика в этом чате',
-  );
-  assert.equal(ownerCmds.includes('me'), false);
+  assert.equal(groupCmds.includes('me'), false);
+  assert.deepEqual(ownerCmds, ['stats', 'costs']);
 });

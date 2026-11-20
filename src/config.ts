@@ -38,7 +38,7 @@ const schema = z.object({
     (value) => !value.trim() || value.split(',').every((id) => /^-\d+$/.test(id.trim())),
     'Expected comma-separated negative Telegram group IDs',
   ),
-  /** Owner Telegram user id; private /stats, /costs, /personalize, /personalize_results work only for this account. */
+  /** Owner Telegram user id; private /stats and /costs work only for this account. */
   OWNER_USER_ID: z.string().default('').refine(
     (value) => !value.trim() || /^\d+$/.test(value.trim()),
     'Expected numeric Telegram user id',
@@ -204,32 +204,6 @@ const schema = z.object({
   AUTO_ANSWER_CONTEXT_LOOKBACK_MINUTES: integer(15, 1, 1440),
   /** Max characters of preceding context for auto-answer prompts. */
   AUTO_ANSWER_CONTEXT_MAX_CHARS: integer(2500, 0, 50000),
-  /** Global gate for participant personalization; per-chat defaults on. */
-  PERSONALIZATION_ENABLED: bool.default('true'),
-  /** Personalization scheduler poll interval (ms). */
-  PERSONALIZATION_TICK_INTERVAL_MS: integer(60000, 5000, 3600000),
-  /** Moscow hour (0–23) when the daily personalization job may run. */
-  PERSONALIZATION_HOUR_MOSCOW: integer(3, 0, 23),
-  /** How many hours of chat history to feed into personalization drafts. */
-  PERSONALIZATION_LOOKBACK_HOURS: integer(24, 1, 168),
-  /** Skip personalization if latest member count is >= this (strictly less required). */
-  PERSONALIZATION_MAX_CHAT_MEMBERS: integer(20, 1, 10000),
-  /** Max participants to update characteristics for per chat per run. */
-  PERSONALIZATION_MAX_USERS_PER_CHAT: integer(30, 1, 200),
-  /** Max messages loaded from DB for a personalization transcript. */
-  PERSONALIZATION_MAX_MESSAGES: integer(500, 1, 5000),
-  /** Max characters of transcript sent into personalization prompts. */
-  PERSONALIZATION_MAX_INPUT_CHARS: integer(12000, 1000, 200000),
-  /** Max tokens for merge / single-user personalization completions. */
-  PERSONALIZATION_MAX_OUTPUT_TOKENS: integer(500, 64, 4000),
-  /** Higher token budget for multi-user draft JSON; merge still uses PERSONALIZATION_MAX_OUTPUT_TOKENS. */
-  PERSONALIZATION_DRAFT_MAX_OUTPUT_TOKENS: integer(1500, 64, 4000),
-  /** Max characters of an existing characteristic injected into prompts. */
-  PERSONALIZATION_PROMPT_MAX_CHARS: integer(3000, 100, 8000),
-  /** How many users to draft in one OpenAI call. */
-  PERSONALIZATION_BATCH_USERS: integer(10, 1, 50),
-  /** Optional model for personalization drafts/merges; empty → OPENAI_MODEL. */
-  OPENAI_PERSONALIZATION_MODEL: z.string().default(''),
   /** Global gate for periodic chat GC (probe Telegram; purge DB for gone chats). */
   CHAT_GC_ENABLED: bool.default('true'),
   /** Chat GC scheduler poll interval (ms); ticks only act at CHAT_GC_HOURS_MOSCOW. */
