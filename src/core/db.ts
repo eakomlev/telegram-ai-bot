@@ -1127,6 +1127,21 @@ export async function listChatMemoryCandidates(now: Date): Promise<number[]> {
     .filter((id) => Number.isSafeInteger(id));
 }
 
+/** Chats the owner can refresh: groups with human messages or an existing memory row. */
+export async function listChatMemoryRefreshTargets(): Promise<number[]> {
+  const result = await pool.query<{ chat_id: string }>(
+    `SELECT chat_id::text AS chat_id FROM (
+       SELECT DISTINCT chat_id FROM messages WHERE is_bot = false AND chat_id < 0
+       UNION
+       SELECT chat_id FROM chat_memory WHERE chat_id < 0
+     ) AS known
+     ORDER BY chat_id`,
+  );
+  return result.rows
+    .map((row) => Number(row.chat_id))
+    .filter((id) => Number.isSafeInteger(id));
+}
+
 /** Claim one chat for the memory merge. True only when a row is returned. */
 export async function claimChatMemory(
   chatId: number,
@@ -1145,6 +1160,34 @@ export async function claimChatMemory(
     [String(chatId), leaseUntil, moscowDate, now],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/** Owner refresh: ignore last_run_on, still refuse a live lease. */
+export async function claimChatMemoryNow(
+  chatId: number,
+  leaseUntil: Date,
+  now: Date,
+): Promise<boolean> {
+  const result = await pool.query(
+    `INSERT INTO chat_memory (chat_id, claimed_until)
+     VALUES ($1, $2)
+     ON CONFLICT (chat_id) DO UPDATE
+     SET claimed_until = EXCLUDED.claimed_until
+     WHERE chat_memory.claimed_until IS NULL OR chat_memory.claimed_until <= $3::timestamptz
+     RETURNING chat_id`,
+    [String(chatId), leaseUntil, now],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Drop a claim this caller still holds. Does not touch body, pins, or last_run_on. */
+export async function releaseChatMemoryClaim(chatId: number, leaseUntil: Date): Promise<void> {
+  await pool.query(
+    `UPDATE chat_memory
+     SET claimed_until = NULL
+     WHERE chat_id = $1 AND claimed_until = $2::timestamptz`,
+    [String(chatId), leaseUntil],
+  );
 }
 
 /** Mark the Moscow day done without touching body or pinned. */

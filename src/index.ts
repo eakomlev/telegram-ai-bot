@@ -22,6 +22,7 @@ import { summarize, type SummaryStyle } from './ai/ai.js';
 import { parseSelection, prepareMessages, splitReply } from './summary/summary.js';
 import { forgetChatFact, rememberChatFact, replyWithChatMemory } from './chat/chat-memory-commands.js';
 import { startChatMemoryScheduler, stopChatMemoryScheduler } from './chat/chat-memory-scheduler.js';
+import { handleMemoryRefreshCallback, replyWithMemoryRefreshPicker } from './chat/chat-memory-refresh-ui.js';
 import { formatChatMemoryBlock } from './chat/chat-memory.js';
 import { handleSettingsCallback, replyWithSettings, requireChatAdmin } from './chat/settings-ui.js';
 import { formatOwnerStatsReport, formatUsageReport } from './ai/usage.js';
@@ -187,6 +188,7 @@ bot.command('costs', async (ctx) => {
     await status.fail('Не удалось получить расходы OpenAI. Попробуйте позже.');
   }
 });
+bot.command('memory_refresh', (ctx) => replyWithMemoryRefreshPicker(ctx));
 bot.command('stats', async (ctx) => {
   if (ctx.chat?.type !== 'private' || !isBotOwner(ctx)) return;
   if (!ownerUserId) {
@@ -233,6 +235,7 @@ bot.command('privacy', (ctx) => ctx.reply(
 
 bot.on('callback_query:data', async (ctx) => {
   if (await handleSettingsCallback(ctx)) return;
+  if (await handleMemoryRefreshCallback(ctx)) return;
   await ctx.answerCallbackQuery().catch(() => {});
 });
 

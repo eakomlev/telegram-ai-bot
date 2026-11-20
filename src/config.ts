@@ -42,7 +42,7 @@ const schema = z.object({
     (value) => !value.trim() || value.split(',').every((id) => /^-\d+$/.test(id.trim())),
     'Expected comma-separated negative Telegram group IDs',
   ),
-  /** Owner Telegram user id; private /stats and /costs work only for this account. */
+  /** Owner Telegram user id; private /stats, /costs and /memory_refresh work only for this account. */
   OWNER_USER_ID: z.string().default('').refine(
     (value) => !value.trim() || /^\d+$/.test(value.trim()),
     'Expected numeric Telegram user id',

@@ -149,6 +149,9 @@ export function isChatMemoryDue(input: {
   return true;
 }
 
+/** Owner `/memory_refresh` reads this many hours, not the nightly lookback. */
+export const CHAT_MEMORY_MANUAL_LOOKBACK_HOURS = 72;
+
 export function shouldSoftSkipChatMemory(humanMessageCount: number): boolean {
   return humanMessageCount <= 0;
 }

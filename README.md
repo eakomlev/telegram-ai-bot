@@ -37,7 +37,7 @@ src/
   config.ts                # Zod + env
   core/                    # db, migrate.ts + migrations/, очереди AI/media, process, status, moscow-time
   ai/                      # OpenAI-вызовы, usage/$, openai-costs (Admin API /costs + usage tokens)
-  chat/                    # настройки, контекст, chat-memory.ts, chat-memory-scheduler.ts, chat-memory-commands.ts, снимки участников, chat GC
+  chat/                    # настройки, контекст, chat-memory.ts, chat-memory-scheduler.ts, chat-memory-commands.ts, chat-memory-refresh-ui.ts, снимки участников, chat GC
   summary/                 # выборка и нарезка текста для саммари
   mention/                 # @упоминания и reply-to-bot
   auto-answer/             # очередь и планировщик автоответов
@@ -63,11 +63,12 @@ src/
 | `/usage` | Токены за текущий месяц по группе (админы) |
 | `/stats` | Рост чатов/участников за месяц (МСК) и токены по чатам — только в личке у `OWNER_USER_ID` |
 | `/costs` | Официальные расходы и токены completions организации OpenAI за текущий месяц (МСК, MTD) — только в личке у `OWNER_USER_ID`; нужен `OPENAI_ADMIN_API_KEY` |
+| `/memory_refresh` | Выбор группы и пересчёт памяти по сообщениям за последние 3 дня — только в личке у `OWNER_USER_ID` |
 | `/help` / `/start` | Справка |
 | `/privacy` | Что сохраняется и куда уходит |
 | `/chatid` | ID группы для `ALLOWED_CHAT_IDS` |
 
-По умолчанию саммари/стихи/GIF доступны только администраторам (`SUMMARY_ADMIN_ONLY` / настройка чата). Для анонимного админа запрос нужно отправить от личного аккаунта. В личке бот просит добавить его в чат/группу; у владельца в DM работают `/stats` и `/costs`. Меню команд в Telegram показывает эти две только для `OWNER_USER_ID` (scope `chat` на личный чат владельца; `all_private_chats` пустой, чтобы остальные DM не видели команды).
+По умолчанию саммари/стихи/GIF доступны только администраторам (`SUMMARY_ADMIN_ONLY` / настройка чата). Для анонимного админа запрос нужно отправить от личного аккаунта. В личке бот просит добавить его в чат/группу; у владельца в DM работают `/stats`, `/costs` и `/memory_refresh`. Меню команд в Telegram показывает эти три только для `OWNER_USER_ID` (scope `chat` на личный чат владельца; `all_private_chats` пустой, чтобы остальные DM не видели команды).
 
 ## Как устроены подсистемы
 
@@ -93,7 +94,7 @@ src/
 
 ### Память чата
 
-Таблица `chat_memory` (миграция `003_chat_memory.sql`): `body` — короткая заметка модели, `pinned` — факты, которые задал администратор, плюс `updated_at`, `source_until`, `last_run_on`, `claimed_until`. Планировщик тикает каждые `CHAT_MEMORY_TICK_INTERVAL_MS` и обновляет `body` только в час `CHAT_MEMORY_HOUR_MOSCOW` (по умолчанию 3:00 Europe/Moscow), не чаще одного раза за московские сутки. В промпт попадают сообщения за `CHAT_MEMORY_LOOKBACK_HOURS` (включая ответы бота). Lease как у новостей: `OPENAI_TIMEOUT_MS × (1 + OPENAI_MAX_RETRIES) + 60 с`, минимум 3 минуты. Если за окно не было сообщений людей, день помечается выполненным, а `body` и `pinned` не стираются. Пустой ответ модели не записывается и не закрывает день: lease остаётся до истечения. Модель — `OPENAI_CHAT_MEMORY_MODEL` или `OPENAI_MODEL` (Chat Completions, без инструментов; у `gpt-6*` `reasoning_effort=none`). Расход пишется в `openai_usage` с kind `chat_memory`; отдельного счётчика нет, `/usage` суммирует все токены. Непустой `ALLOWED_CHAT_IDS` оставляет только эти чаты и не проставляет `last_run_on` отфильтрованным. `/memory`, `/remember` и `/forget` доступны администраторам, даже если `CHAT_MEMORY_ENABLED=false`. Закреплённые факты и ночная заметка уходят в системный промпт упоминаний, автоответов и саммари как фон. Chat GC удаляет строку вместе с остальными данными недоступного чата. В `messages` хранится `reply_to_message_id`.
+Таблица `chat_memory` (миграция `003_chat_memory.sql`): `body` — короткая заметка модели, `pinned` — факты, которые задал администратор, плюс `updated_at`, `source_until`, `last_run_on`, `claimed_until`. Планировщик тикает каждые `CHAT_MEMORY_TICK_INTERVAL_MS` и обновляет `body` только в час `CHAT_MEMORY_HOUR_MOSCOW` (по умолчанию 3:00 Europe/Moscow), не чаще одного раза за московские сутки. В промпт попадают сообщения за `CHAT_MEMORY_LOOKBACK_HOURS` (включая ответы бота). Lease как у новостей: `OPENAI_TIMEOUT_MS × (1 + OPENAI_MAX_RETRIES) + 60 с`, минимум 3 минуты. Если за окно не было сообщений людей, день помечается выполненным, а `body` и `pinned` не стираются. Пустой ответ модели не записывается и не закрывает день: lease остаётся до истечения. Модель — `OPENAI_CHAT_MEMORY_MODEL` или `OPENAI_MODEL` (Chat Completions, без инструментов; у `gpt-6*` `reasoning_effort=none`). Расход пишется в `openai_usage` с kind `chat_memory`; отдельного счётчика нет, `/usage` суммирует все токены. Непустой `ALLOWED_CHAT_IDS` оставляет только эти чаты и не проставляет `last_run_on` отфильтрованным. `/memory`, `/remember` и `/forget` доступны администраторам, даже если `CHAT_MEMORY_ENABLED=false`. Закреплённые факты и заметка уходят в сообщение пользователя у упоминаний, автоответов и саммари как недоверенный фон. Владелец в личке может запустить `/memory_refresh`: выбрать группу и пересчитать `body` по сообщениям за последние 3 суток (72 часа), в любой час и даже если ночной проход сегодня уже был. Закреплённые факты эта команда не меняет. Если за 3 дня не было сообщений людей, заметка остаётся как была и день для ночного прохода не закрывается. Пока `CHAT_MEMORY_ENABLED=false`, команда не стартует. Chat GC удаляет строку вместе с остальными данными недоступного чата. В `messages` хранится `reply_to_message_id`.
 
 ### Ежедневные новости
 
@@ -144,7 +145,7 @@ Inline-меню только для админов: саммари только 
 | `OPENAI_API_KEY` | — | Ключ OpenAI |
 | `POSTGRES_PASSWORD` | — | Пароль Postgres в Compose |
 | `ALLOWED_CHAT_IDS` | пусто | CSV отрицательных group id; пусто — все группы (только для доверенного использования) |
-| `OWNER_USER_ID` | пусто | Telegram user id владельца для `/stats` и `/costs` |
+| `OWNER_USER_ID` | пусто | Telegram user id владельца для `/stats`, `/costs` и `/memory_refresh` |
 | `SUMMARY_ADMIN_ONLY` | `true` | Дефолт «саммари только админам» для новых чатов |
 
 ### OpenAI
